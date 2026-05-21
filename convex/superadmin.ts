@@ -121,13 +121,29 @@ export const exitWorkspace = mutation({
 
 /**
  * List every workspace in the system. Returns null if the caller is not
- * a superadmin (so the client can render an access-denied state).
+ * a superadmin.
+ *
+ * Checks the `superadmins` table directly (not `actor.kind`) because a
+ * staff member with their own workspace membership resolves to a
+ * MemberActor by default — they're still allowed to list all workspaces.
  */
 export const listAllWorkspaces = query({
   args: {},
   handler: async (ctx) => {
-    const actor = await tryGetActor(ctx);
-    if (!actor || !isSuperadmin(actor)) return null;
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+      .unique();
+    if (!user) return null;
+
+    const row = await ctx.db
+      .query("superadmins")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .first();
+    if (!row || row.archived) return null;
 
     return await ctx.db.query("workspaces").take(200);
   },

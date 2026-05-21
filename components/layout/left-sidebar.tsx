@@ -32,7 +32,7 @@ export function LeftSidebar() {
     pathname.startsWith("/customers/") && Boolean(customerId);
 
   return (
-    <aside className="flex h-screen w-14 flex-col items-center gap-2 bg-sidebar py-3 text-sidebar-foreground">
+    <aside className="flex h-full w-14 flex-col items-center gap-2 bg-sidebar py-3 text-sidebar-foreground">
       {/* Brand mark */}
       <Link
         href="/customers"

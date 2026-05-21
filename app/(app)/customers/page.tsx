@@ -1,14 +1,22 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
 import Link from "next/link";
+import { api } from "@/convex/_generated/api";
+import {
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { CustomerFormDialog } from "@/components/customers/customer-form-dialog";
 
 export default function CustomersPage() {
-  const customers = useQuery(api.customers.list);
+  const customers = useQuery(api.customers.list, {});
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
     <div className="mx-auto max-w-5xl px-8 py-10">
@@ -16,11 +24,13 @@ export default function CustomersPage() {
         <h1 className="text-3xl font-semibold tracking-tight text-ink">
           Customers
         </h1>
-        <Button>
+        <Button onClick={() => setDialogOpen(true)}>
           <Plus className="h-4 w-4" />
           New customer
         </Button>
       </div>
+
+      <CustomerFormDialog open={dialogOpen} onOpenChange={setDialogOpen} />
 
       {customers === undefined && (
         <div className="text-sm text-ink-3">Loading…</div>
