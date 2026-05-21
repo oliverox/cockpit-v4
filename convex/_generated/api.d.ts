@@ -8,11 +8,16 @@
  * @module
  */
 
+import type * as calendar from "../calendar.js";
 import type * as customers from "../customers.js";
 import type * as documents from "../documents.js";
+import type * as inbox from "../inbox.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as messages from "../messages.js";
 import type * as superadmin from "../superadmin.js";
 import type * as tasks from "../tasks.js";
+import type * as team from "../team.js";
+import type * as threads from "../threads.js";
 import type * as users from "../users.js";
 import type * as workspaces from "../workspaces.js";
 
@@ -23,11 +28,16 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  calendar: typeof calendar;
   customers: typeof customers;
   documents: typeof documents;
+  inbox: typeof inbox;
   "lib/auth": typeof lib_auth;
+  messages: typeof messages;
   superadmin: typeof superadmin;
   tasks: typeof tasks;
+  team: typeof team;
+  threads: typeof threads;
   users: typeof users;
   workspaces: typeof workspaces;
 }>;
