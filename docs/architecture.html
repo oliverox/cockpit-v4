@@ -1,0 +1,1542 @@
+<!DOCTYPE html>
+<html lang="en" data-lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cockpit v4 — Architecture Brief</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --fmu-navy: #092448;
+  --fmu-navy-2: #122e57;
+  --fmu-green: #1c764d;
+  --fmu-green-2: #239961;
+  --fmu-yellow: #ffbb00;
+  --fmu-red: #df0a28;
+  --background: #f6f5f1;
+  --bg-2: #efede7;
+  --card: #ffffff;
+  --card-tint: #fbfaf6;
+  --line: #e7e3d8;
+  --line-2: #d8d3c4;
+  --ink: #0c1a30;
+  --ink-2: #41506a;
+  --ink-3: #7d8699;
+  --ink-4: #a9afbb;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: 'Inter Tight', system-ui, -apple-system, sans-serif;
+  background: var(--background);
+  color: var(--ink);
+  line-height: 1.65;
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+/* Language toggle — show only the active language */
+html[data-lang="en"] [lang="fr"] { display: none !important; }
+html[data-lang="fr"] [lang="en"] { display: none !important; }
+
+.doc { max-width: 920px; margin: 0 auto; padding: 72px 32px 128px; }
+
+/* Floating language toggle */
+.lang-toggle {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 50;
+  display: inline-flex;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  padding: 3px;
+  background: var(--card);
+  box-shadow: 0 4px 16px -8px rgba(9,36,72,0.15);
+  font-family: 'JetBrains Mono', monospace;
+}
+.lang-btn {
+  border: none;
+  background: transparent;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--ink-3);
+  cursor: pointer;
+  font-weight: 500;
+  font-family: inherit;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.lang-btn:hover { color: var(--ink); }
+.lang-btn.active { background: var(--fmu-navy); color: white; }
+.lang-btn.active:hover { color: white; }
+
+.doc-header { padding-bottom: 40px; margin-bottom: 56px; border-bottom: 1px solid var(--line); }
+.eyebrow {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 18px;
+}
+.doc-title {
+  font-size: 56px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.05;
+  color: var(--fmu-navy);
+  margin-bottom: 18px;
+}
+.doc-subtitle {
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--ink-2);
+  line-height: 1.5;
+  max-width: 720px;
+}
+.doc-meta {
+  margin-top: 28px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 28px;
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.doc-meta span strong { color: var(--ink); font-weight: 500; }
+
+.toc {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 28px 32px;
+  margin-bottom: 64px;
+}
+.toc h3 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 18px;
+  font-weight: 500;
+}
+.toc ol { list-style: none; counter-reset: section; column-count: 2; column-gap: 40px; }
+.toc li { counter-increment: section; margin-bottom: 10px; break-inside: avoid; }
+.toc li::before {
+  content: counter(section, decimal-leading-zero);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--ink-4);
+  margin-right: 14px;
+}
+.toc a { color: var(--ink); text-decoration: none; font-size: 15px; }
+.toc a:hover { color: var(--fmu-navy); text-decoration: underline; }
+
+section { margin-bottom: 88px; }
+.section-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--ink-4);
+  margin-bottom: 8px;
+  display: block;
+}
+h2 {
+  font-size: 34px;
+  font-weight: 600;
+  color: var(--fmu-navy);
+  letter-spacing: -0.012em;
+  line-height: 1.18;
+  margin-bottom: 24px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+h3 {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-top: 40px;
+  margin-bottom: 12px;
+  letter-spacing: -0.005em;
+}
+h4 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-top: 24px;
+  margin-bottom: 10px;
+}
+p {
+  margin-bottom: 16px;
+  color: var(--ink-2);
+  max-width: 720px;
+}
+p strong, li strong { color: var(--ink); font-weight: 600; }
+ul, ol { margin-bottom: 18px; padding-left: 22px; max-width: 720px; }
+li { margin-bottom: 8px; color: var(--ink-2); }
+li > ul, li > ol { margin-top: 8px; margin-bottom: 0; }
+a { color: var(--fmu-navy); }
+
+code {
+  background: var(--bg-2);
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 0.86em;
+  color: var(--fmu-navy);
+}
+pre {
+  background: var(--fmu-navy);
+  color: #d8e1ee;
+  padding: 22px 26px;
+  border-radius: 12px;
+  overflow-x: auto;
+  margin: 16px 0 24px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  max-width: 100%;
+}
+pre code { background: transparent; color: inherit; padding: 0; font-size: inherit; }
+pre .k { color: #ffbb00; }
+pre .s { color: #a3d9a5; }
+pre .c { color: #7d8699; font-style: italic; }
+pre .t { color: #cdd5e2; }
+
+.diagram {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 22px 26px;
+  margin: 20px 0 28px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  overflow-x: auto;
+  color: var(--ink);
+  white-space: pre;
+}
+
+.callout {
+  background: var(--card-tint);
+  border-left: 3px solid var(--fmu-navy);
+  padding: 16px 22px;
+  border-radius: 6px;
+  margin: 24px 0;
+  max-width: 720px;
+}
+.callout.warn { border-left-color: var(--fmu-yellow); background: #fffaeb; }
+.callout.good { border-left-color: var(--fmu-green); background: #eef7f0; }
+.callout-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 8px;
+  font-weight: 500;
+}
+.callout p { margin: 0; color: var(--ink); }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0 28px;
+  font-size: 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+th {
+  text-align: left;
+  padding: 11px 16px;
+  background: var(--bg-2);
+  color: var(--ink-2);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--line-2);
+}
+td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-2);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-weight: 500; color: var(--ink); white-space: nowrap; }
+td .mono { font-size: 12.5px; }
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.pill--draft { background: var(--bg-2); color: var(--ink-2); }
+.pill--blocked { background: #fce8e9; color: #87212e; }
+.pill--review { background: #fde7c8; color: #8a4a09; }
+.pill--approved { background: #c9ecd5; color: #1c5a36; }
+.pill--filed { background: #d9e3ff; color: #213b87; }
+.pill--superseded { background: var(--bg-2); color: var(--ink-3); text-decoration: line-through; }
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin: 24px 0 32px;
+}
+.gcard {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 22px 24px;
+}
+.gcard .gcard-eyebrow {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 10px;
+}
+.gcard h4 { margin: 0 0 8px; font-size: 16px; color: var(--fmu-navy); }
+.gcard p { font-size: 14px; margin: 0; color: var(--ink-2); }
+
+.three-shapes {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin: 24px 0 32px;
+}
+.three-shapes .shape {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px;
+}
+.three-shapes .shape .num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 22px;
+  color: var(--fmu-yellow);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.three-shapes .shape h4 { margin: 0 0 6px; color: var(--fmu-navy); }
+.three-shapes .shape p { font-size: 13.5px; margin: 0; color: var(--ink-2); }
+@media (max-width: 720px) { .three-shapes { grid-template-columns: 1fr; } }
+
+.example {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 28px;
+  margin: 24px 0 32px;
+}
+.example h4 { margin-top: 20px; }
+.example h4:first-child { margin-top: 0; }
+
+footer {
+  margin-top: 96px;
+  padding-top: 32px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-3);
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+@media (max-width: 720px) {
+  .doc { padding: 40px 20px 64px; }
+  .doc-title { font-size: 38px; }
+  .doc-subtitle { font-size: 18px; }
+  .toc ol { column-count: 1; }
+  h2 { font-size: 26px; }
+  h3 { font-size: 18px; }
+  pre { font-size: 11.5px; padding: 16px 18px; }
+  .diagram { font-size: 11px; padding: 16px 18px; }
+  .lang-toggle { top: 12px; right: 12px; }
+}
+</style>
+</head>
+<body>
+
+<div class="lang-toggle" role="group" aria-label="Language">
+  <button class="lang-btn active" data-lang="en">EN</button>
+  <button class="lang-btn" data-lang="fr">FR</button>
+</div>
+
+<div class="doc">
+
+<header class="doc-header">
+  <div class="eyebrow">
+    <span lang="en">Cockpit · Architecture Brief · v4</span>
+    <span lang="fr">Cockpit · Note d'architecture · v4</span>
+  </div>
+  <h1 class="doc-title">Cockpit v4</h1>
+  <p class="doc-subtitle" lang="en">A multi-industry operations platform — flexible enough for accountants, notaries, agencies, and beyond — built on a shared core of CRM, documents, tasks, chat, calendar, and AI.</p>
+  <p class="doc-subtitle" lang="fr">Une plateforme d'opérations multi-secteurs — suffisamment flexible pour les experts-comptables, notaires, agences et au-delà — bâtie sur un socle commun : CRM, gestion documentaire, gestion des tâches, messagerie, calendrier et IA.</p>
+  <div class="doc-meta" lang="en">
+    <span><strong>Status:</strong> Architectural sketch</span>
+    <span><strong>Date:</strong> 21 May 2026</span>
+    <span><strong>Author:</strong> facture.mu</span>
+    <span><strong>Predecessor:</strong> Cockpit v3</span>
+  </div>
+  <div class="doc-meta" lang="fr">
+    <span><strong>Statut :</strong> Esquisse d'architecture</span>
+    <span><strong>Date :</strong> 21 mai 2026</span>
+    <span><strong>Auteur :</strong> facture.mu</span>
+    <span><strong>Précédent :</strong> Cockpit v3</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h3 lang="en">Contents</h3>
+  <h3 lang="fr">Sommaire</h3>
+  <ol lang="en">
+    <li><a href="#vision">Vision</a></li>
+    <li><a href="#big-idea">Core + Modules</a></li>
+    <li><a href="#core">The Core Platform</a></li>
+    <li><a href="#modules">The Module System</a></li>
+    <li><a href="#outputs">Task Outputs: Substrate / Artifact / Card</a></li>
+    <li><a href="#lifecycle">Task Lifecycle &amp; Approval</a></li>
+    <li><a href="#deps">Dependencies &amp; Prerequisites</a></li>
+    <li><a href="#auth">Authorization &amp; Audiences</a></li>
+    <li><a href="#chat">Chat Surfaces</a></li>
+    <li><a href="#control-tower">Control Tower (AI)</a></li>
+    <li><a href="#calendar">Calendar</a></li>
+    <li><a href="#no-module">No-Module Experience</a></li>
+    <li><a href="#example">Worked Example: VAT Return</a></li>
+    <li><a href="#roadmap">Build Roadmap</a></li>
+    <li><a href="#schema">Schema Appendix</a></li>
+  </ol>
+  <ol lang="fr">
+    <li><a href="#vision">Vision</a></li>
+    <li><a href="#big-idea">Socle + Modules</a></li>
+    <li><a href="#core">La plateforme socle</a></li>
+    <li><a href="#modules">Le système de modules</a></li>
+    <li><a href="#outputs">Sorties de tâches : Substrat / Artefact / Carte</a></li>
+    <li><a href="#lifecycle">Cycle de vie &amp; approbation</a></li>
+    <li><a href="#deps">Dépendances &amp; prérequis</a></li>
+    <li><a href="#auth">Autorisations &amp; audiences</a></li>
+    <li><a href="#chat">Surfaces de messagerie</a></li>
+    <li><a href="#control-tower">Tour de Contrôle (IA)</a></li>
+    <li><a href="#calendar">Calendrier</a></li>
+    <li><a href="#no-module">Expérience sans module</a></li>
+    <li><a href="#example">Exemple complet : déclaration de TVA</a></li>
+    <li><a href="#roadmap">Feuille de route</a></li>
+    <li><a href="#schema">Annexe : schéma</a></li>
+  </ol>
+</nav>
+
+<!-- 1. VISION -->
+<section id="vision">
+  <span class="section-num" lang="en">01 · Vision</span>
+  <span class="section-num" lang="fr">01 · Vision</span>
+  <h2 lang="en">Why Cockpit v4</h2>
+  <h2 lang="fr">Pourquoi Cockpit v4</h2>
+  <p lang="en">Cockpit v3 is an AI ops layer for small-firm accountants in Mauritius. The workflows it implements — bank reconciliation, expense scanning, VAT returns, chart-of-accounts setup — are right, but they're hard-wired into the architecture. Every piece of the codebase assumes "the user is an accountant."</p>
+  <p lang="fr">Cockpit v3 est une couche d'opérations dopée à l'IA pour les cabinets comptables mauriciens. Les flux de travail qu'il implémente — rapprochement bancaire, scan des dépenses, déclarations de TVA, paramétrage du plan comptable — sont les bons, mais ils sont câblés en dur dans l'architecture. Chaque morceau du code source suppose que <em>« l'utilisateur est expert-comptable »</em>.</p>
+  <p lang="en">That assumption is the ceiling. A notary needs digital signatures and deed management. A design agency needs deliverable tracking and review approvals. They all need the same foundation underneath: <strong>customers, documents, tasks, communication, deadlines, and an AI assistant</strong>. v4 separates that foundation from the industry-specific work that sits on top of it.</p>
+  <p lang="fr">Cette hypothèse est le plafond. Un notaire a besoin de signatures électroniques et de gestion d'actes. Une agence de design a besoin de suivi de livrables et de validations. Tous ont besoin du même socle en dessous : <strong>clients, documents, tâches, communication, échéances, et un assistant IA</strong>. La v4 sépare ce socle du travail spécifique à chaque métier qui s'empile par-dessus.</p>
+  <p lang="en">The bet: by building the core right the first time, we can ship genuinely different vertical experiences (accounting, notary, agency) on the same codebase, with the same chat, the same client portal, the same AI — and let firms install only the modules they need.</p>
+  <p lang="fr">Le pari : en construisant le socle correctement dès le départ, on peut livrer des expériences verticales réellement différentes (expertise comptable, notariat, agence) sur le même code source, avec la même messagerie, le même portail client, la même IA — et laisser les cabinets installer uniquement les modules dont ils ont besoin.</p>
+
+  <div class="callout" lang="en">
+    <div class="callout-title">In one sentence</div>
+    <p>Cockpit v4 is a multi-tenant operations platform whose <strong>core</strong> is a CRM + document manager + task manager + chat + calendar + AI assistant — and whose <strong>modules</strong> are industry-specific workflows that plug into that core through a declarative manifest.</p>
+  </div>
+  <div class="callout" lang="fr">
+    <div class="callout-title">En une phrase</div>
+    <p>Cockpit v4 est une plateforme d'opérations multi-tenant dont le <strong>socle</strong> est un CRM + gestionnaire de documents + gestionnaire de tâches + messagerie + calendrier + assistant IA — et dont les <strong>modules</strong> sont des flux de travail métiers qui s'enfichent dans ce socle via un manifeste déclaratif.</p>
+  </div>
+</section>
+
+<!-- 2. BIG IDEA -->
+<section id="big-idea">
+  <span class="section-num" lang="en">02 · Architecture</span>
+  <span class="section-num" lang="fr">02 · Architecture</span>
+  <h2 lang="en">Core + Modules</h2>
+  <h2 lang="fr">Socle + Modules</h2>
+  <p lang="en">Two layers, with a strict contract between them.</p>
+  <p lang="fr">Deux couches, avec un contrat strict entre elles.</p>
+  <div class="diagram" lang="en">┌──────────────────────────────────────────────────────────┐
+│  CORE PLATFORM                                           │
+│  Workspaces · Members · Customers · Documents · Tasks    │
+│  Threads &amp; Chat · Events · Audit · Calendar · Inbox      │
+│  Control Tower (AI) · Connectors · Prerequisite engine   │
+└──────────────────────────────────────────────────────────┘
+              ▲           ▲           ▲           ▲
+   ┌──────────┘    ┌──────┘    ┌──────┘    ┌──────┘
+┌──┴────────┐ ┌────┴───┐ ┌─────┴──┐ ┌──────┴─────┐
+│ Accounting│ │ Notary │ │Payroll │ │ Legal /    │  …more
+│  module   │ │ module │ │ module │ │ Compliance │
+└───────────┘ └────────┘ └────────┘ └────────────┘</div>
+  <div class="diagram" lang="fr">┌──────────────────────────────────────────────────────────┐
+│  PLATEFORME SOCLE                                        │
+│  Espaces · Membres · Clients · Documents · Tâches        │
+│  Fils &amp; messagerie · Événements · Audit · Calendrier      │
+│  Boîte de réception · Tour de Contrôle (IA) ·            │
+│  Connecteurs · Moteur de prérequis                       │
+└──────────────────────────────────────────────────────────┘
+              ▲           ▲           ▲           ▲
+   ┌──────────┘    ┌──────┘    ┌──────┘    ┌──────┘
+┌──┴────────┐ ┌────┴───┐ ┌─────┴──┐ ┌──────┴─────┐
+│Expertise  │ │Notariat│ │ Paie   │ │ Juridique /│  …d'autres
+│comptable  │ │        │ │        │ │ Conformité │
+└───────────┘ └────────┘ └────────┘ └────────────┘</div>
+
+  <p lang="en"><strong>The core</strong> is opinionated about the shape every industry shares: <em>"a firm serves customers, exchanges documents with them, runs tasks against those documents, and communicates throughout."</em> Industry modules don't reinvent that — they extend it.</p>
+  <p lang="fr"><strong>Le socle</strong> est opinioné sur la forme que partagent tous les secteurs : <em>« un cabinet sert des clients, échange des documents avec eux, exécute des tâches sur ces documents et communique tout au long »</em>. Les modules métiers ne réinventent pas cela — ils l'étendent.</p>
+  <p lang="en"><strong>Modules are à-la-carte, not industry-bundled.</strong> An accounting firm can install the Notary module if they collect signed engagement letters. A notary can install Payroll if they have a few employees on books. There's no "accounting industry mode" — there are just modules that any workspace can enable.</p>
+  <p lang="fr"><strong>Les modules sont à la carte, pas regroupés par secteur.</strong> Un cabinet comptable peut installer le module Notariat s'il collecte des lettres de mission signées. Un notaire peut installer Paie s'il a quelques employés en interne. Il n'y a pas de « mode secteur expertise comptable » — il y a juste des modules que n'importe quel espace de travail peut activer.</p>
+  <p lang="en"><strong>"Industries" are tags, not concepts.</strong> They exist only to help the module-install catalog suggest sensible defaults ("most accountants pick these three"). The schema doesn't know what an industry is.</p>
+  <p lang="fr"><strong>Les « secteurs » sont des étiquettes, pas des concepts.</strong> Ils n'existent que pour aider le catalogue d'installation de modules à suggérer des valeurs par défaut sensées (« la plupart des experts-comptables choisissent ces trois-là »). Le schéma de base ne sait pas ce qu'est un secteur.</p>
+</section>
+
+<!-- 3. CORE -->
+<section id="core">
+  <span class="section-num" lang="en">03 · The Core</span>
+  <span class="section-num" lang="fr">03 · Le socle</span>
+  <h2 lang="en">The Core Platform</h2>
+  <h2 lang="fr">La plateforme socle</h2>
+  <p lang="en">Everything in this section is built once and used by every workspace, regardless of which modules are installed.</p>
+  <p lang="fr">Tout ce qui figure dans cette section est construit une seule fois et utilisé par chaque espace de travail, quels que soient les modules installés.</p>
+
+  <div class="grid" lang="en">
+    <div class="gcard"><div class="gcard-eyebrow">Tenancy</div><h4>Workspaces &amp; Members</h4><p>One workspace per firm (backed by a Clerk Organization). Invite-only signup. Roles: owner, admin, member. Members can be scoped to all customers or specific ones.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Two audiences</div><h4>Firm members + Clients</h4><p>Firm members are Clerk org members. Clients are plain Clerk users linked via <code>customer_access</code>. They live in the same Clerk app but use different shells.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">CRM</div><h4>Customers</h4><p>The unit every module hangs off. Holds basic info, applied modules (optional override), and serves as the scope for documents, tasks, threads.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Universal inbox</div><h4>Documents</h4><p>One folder per customer. Anything uploaded — via chat, manually, by a connector, by a task — lands here. Visibility flag controls firm-only vs client-shared.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">The work surface</div><h4>Tasks</h4><p>Generic envelope: <code>{customerId, moduleId, type, status, payload}</code>. Each module defines its own types and renderers. Status DAG, audit log, amendments.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Conversation</div><h4>Threads &amp; messages</h4><p>Customer-scoped (internal/client) + team-scoped (DMs, channels). Messages can be text, attachments, or typed module cards rendered by the module that owns them.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Deadlines</div><h4>Calendar</h4><p>Manual events + task due dates + module-contributed deadlines. Workspace, per-customer, and per-user views.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">AI co-pilot</div><h4>Control Tower</h4><p>The AI assistant. A participant in chat (you can @mention it anywhere) and a dedicated right-rail surface with context chips, action cards, and tool transparency.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Cross-module</div><h4>Inbox</h4><p>Cross-customer, cross-module aggregator of things waiting on me — task reviews, mentions, signature requests, connector failures.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Trust</div><h4>Audit log</h4><p>Append-only record of every substrate write, approval, reopen. Required for accounting and notary. Used by AI to explain what happened.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">External data</div><h4>Connectors</h4><p>Per-customer integrations (T1 Expenses, banks, MRA later). Encrypted credentials, idempotent imports, status surfaced in UI.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Workflow logic</div><h4>Prereq engine</h4><p>Declarative: tasks declare prerequisites against substrate/documents/other tasks. Engine blocks/unblocks live, auto-spawns fix tasks, surfaces guided onboarding.</p></div>
+  </div>
+
+  <div class="grid" lang="fr">
+    <div class="gcard"><div class="gcard-eyebrow">Multi-tenant</div><h4>Espaces &amp; membres</h4><p>Un espace de travail par cabinet (adossé à une Organisation Clerk). Inscription sur invitation uniquement. Rôles : propriétaire, admin, membre. Les membres peuvent être limités à tous les clients ou à certains.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Deux audiences</div><h4>Membres du cabinet + clients</h4><p>Les membres du cabinet sont des membres d'organisation Clerk. Les clients sont de simples utilisateurs Clerk liés via <code>customer_access</code>. Ils cohabitent dans la même application Clerk mais utilisent des coques différentes.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">CRM</div><h4>Clients</h4><p>L'unité à laquelle chaque module se rattache. Contient les informations de base, les modules activés (option de surcharge) et sert de portée aux documents, tâches et fils.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Boîte universelle</div><h4>Documents</h4><p>Un dossier par client. Tout ce qui est téléversé — via la messagerie, manuellement, par un connecteur, par une tâche — atterrit ici. Un indicateur de visibilité contrôle « interne au cabinet » vs « partagé avec le client ».</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Surface de travail</div><h4>Tâches</h4><p>Enveloppe générique : <code>{customerId, moduleId, type, status, payload}</code>. Chaque module définit ses propres types et rendus. DAG de statuts, journal d'audit, amendements.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Conversation</div><h4>Fils &amp; messages</h4><p>À portée client (interne / client) + à portée équipe (DM, canaux). Les messages peuvent être du texte, des pièces jointes ou des cartes typées rendues par le module qui les détient.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Échéances</div><h4>Calendrier</h4><p>Événements manuels + dates d'échéance des tâches + échéances apportées par les modules. Vues à l'échelle de l'espace, par client et par utilisateur.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Co-pilote IA</div><h4>Tour de Contrôle</h4><p>L'assistant IA. Participant à la messagerie (vous pouvez le mentionner partout) <em>et</em> surface dédiée dans le rail droit avec des puces de contexte, des cartes d'action et la transparence sur les outils.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Inter-modules</div><h4>Boîte de réception</h4><p>Agrégateur inter-clients et inter-modules des choses qui m'attendent — revues de tâches, mentions, demandes de signature, échecs de connecteurs.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Confiance</div><h4>Journal d'audit</h4><p>Historique en ajout seul de chaque écriture sur le substrat, approbation, réouverture. Indispensable pour la comptabilité et le notariat. Utilisé par l'IA pour expliquer ce qui s'est passé.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Données externes</div><h4>Connecteurs</h4><p>Intégrations par client (T1 Expenses, banques, MRA plus tard). Identifiants chiffrés, imports idempotents, statut visible dans l'interface.</p></div>
+    <div class="gcard"><div class="gcard-eyebrow">Logique de flux</div><h4>Moteur de prérequis</h4><p>Déclaratif : les tâches déclarent leurs prérequis sur le substrat, les documents et d'autres tâches. Le moteur bloque/débloque en direct, génère des tâches correctives, et guide l'onboarding.</p></div>
+  </div>
+
+  <p lang="en">The point of the list above isn't "this is what we ship in v1." It's: <strong>none of this leaks into modules.</strong> When we add the Notary module, we don't add a calendar feature. We don't add a chat feature. We don't add a permissions system. Those exist already.</p>
+  <p lang="fr">L'intérêt de la liste ci-dessus n'est pas « voici ce qu'on livre en v1 ». C'est : <strong>rien de tout cela ne déborde dans les modules.</strong> Quand on ajoutera le module Notariat, on n'ajoutera pas de fonction calendrier. Pas de fonction messagerie. Pas de système d'autorisations. Tout cela existe déjà.</p>
+</section>
+
+<!-- 4. MODULES -->
+<section id="modules">
+  <span class="section-num" lang="en">04 · Modules</span>
+  <span class="section-num" lang="fr">04 · Modules</span>
+  <h2 lang="en">The Module System</h2>
+  <h2 lang="fr">Le système de modules</h2>
+  <p lang="en">A module is a folder with a <strong>manifest</strong> that declares everything it contributes to the platform. The core reads manifests at build time and wires up nav, task types, AI tools, calendar events, artifact renderers, and prerequisites. Modules don't import each other; they communicate through events on the core's bus.</p>
+  <p lang="fr">Un module est un dossier avec un <strong>manifeste</strong> qui déclare tout ce qu'il apporte à la plateforme. Le socle lit les manifestes au moment de la compilation et câble la navigation, les types de tâches, les outils d'IA, les événements de calendrier, les rendus d'artefacts et les prérequis. Les modules ne s'importent pas entre eux ; ils communiquent via le bus d'événements du socle.</p>
+
+  <h3 lang="en">The manifest contract</h3>
+  <h3 lang="fr">Le contrat du manifeste</h3>
+
+  <pre lang="en"><code><span class="c">// modules/accounting/manifest.ts</span>
+<span class="k">export const</span> manifest: ModuleManifest = {
+  id: <span class="s">"accounting"</span>,
+  name: <span class="s">"Accounting"</span>,
+  industryTags: [<span class="s">"accounting"</span>, <span class="s">"finance"</span>],
+
+  navigation: {
+    <span class="c">// entries in the left rail when inside a customer</span>
+    customer: [
+      { label: <span class="s">"Bank Rec"</span>,         href: <span class="s">"bankrec"</span>,   icon: BankIcon },
+      { label: <span class="s">"Expenses"</span>,         href: <span class="s">"expenses"</span>,  icon: ReceiptIcon },
+      { label: <span class="s">"VAT"</span>,              href: <span class="s">"vat"</span>,       icon: PercentIcon },
+      { label: <span class="s">"Chart of Accounts"</span>, href: <span class="s">"coa"</span>,       icon: BookIcon },
+    ],
+  },
+
+  taskTypes: {
+    <span class="s">"accounting.bank_rec"</span>:     { renderer: BankRecPage,   listItem: BankRecRow,   pill: <span class="s">"Bank Rec"</span> },
+    <span class="s">"accounting.expense_cat"</span>:  { renderer: ExpenseScan,   listItem: ExpenseRow,   pill: <span class="s">"Expenses"</span> },
+    <span class="s">"accounting.vat_return"</span>:   { renderer: VatReturn,     listItem: VatRow,       pill: <span class="s">"VAT"</span> },
+    <span class="s">"accounting.coa_setup"</span>:    { renderer: CoaSetup,      listItem: CoaRow,       pill: <span class="s">"CoA"</span> },
+  },
+
+  messageTypes: {
+    <span class="c">// typed cards rendered inline in threads</span>
+    <span class="s">"accounting.vat_summary"</span>: { renderer: VatSummaryCard },
+    <span class="s">"accounting.recon_done"</span>:  { renderer: ReconDoneCard },
+  },
+
+  artifacts: {
+    <span class="c">// auto-generated on task approval</span>
+    <span class="s">"accounting.bank_rec"</span>: [
+      { id: <span class="s">"recon-statement"</span>, render: renderReconStatement, mime: <span class="s">"application/pdf"</span> },
+      { id: <span class="s">"adjustments"</span>,    render: renderAdjustments,    mime: <span class="s">"text/csv"</span> },
+    ],
+  },
+
+  prerequisites: {
+    <span class="s">"accounting.expense_cat"</span>: [
+      { id: <span class="s">"coa-exists"</span>, check: hasAnyAccounts,
+        fix: { taskType: <span class="s">"accounting.coa_setup"</span>, autoOffer: <span class="k">true</span> } },
+    ],
+    <span class="s">"accounting.vat_return"</span>: [
+      { id: <span class="s">"period-expense-cats-approved"</span>, check: allExpenseCatsApprovedInPeriod },
+    ],
+  },
+
+  guardrails: {
+    <span class="s">"accounting.vat_return"</span>: {
+      statuses: [<span class="s">"draft"</span>, <span class="s">"firm_approved"</span>, <span class="s">"filed"</span>, <span class="s">"superseded"</span>],
+      reopenPolicy: {
+        draft: <span class="s">"free"</span>,
+        firm_approved: { requires: <span class="s">"admin"</span>, reason: <span class="s">"required"</span> },
+        filed: <span class="s">"blocked"</span>,  <span class="c">// must use amendment instead</span>
+      },
+      locks: { <span class="s">"ledger_entries.vat.*"</span>: <span class="s">"period"</span> },
+      amendmentTask: <span class="s">"accounting.vat_amendment"</span>,
+    },
+  },
+
+  aiTools: [
+    { name: <span class="s">"start_bank_reconciliation"</span>, handler: api.modules.accounting.bankRec.start, ... },
+    { name: <span class="s">"categorize_receipt"</span>,        handler: api.modules.accounting.expenses.classify, ... },
+    { name: <span class="s">"summarize_period"</span>,          handler: api.modules.accounting.reports.summarize, ... },
+  ],
+
+  calendarContributors: [generateVatDeadlines, generateYearEndEvents],
+  eventHandlers: { <span class="s">"document.uploaded"</span>: maybeRouteToReceiptScan },
+  documentClassifiers: [classifyInvoice, classifyReceipt, classifyStatement],
+};</code></pre>
+
+  <pre lang="fr"><code><span class="c">// modules/accounting/manifest.ts</span>
+<span class="k">export const</span> manifest: ModuleManifest = {
+  id: <span class="s">"accounting"</span>,
+  name: <span class="s">"Expertise comptable"</span>,
+  industryTags: [<span class="s">"comptabilite"</span>, <span class="s">"finance"</span>],
+
+  navigation: {
+    <span class="c">// entrées dans le rail gauche lorsqu'on est dans un client</span>
+    customer: [
+      { label: <span class="s">"Rapprochement bancaire"</span>, href: <span class="s">"bankrec"</span>,  icon: BankIcon },
+      { label: <span class="s">"Dépenses"</span>,               href: <span class="s">"expenses"</span>, icon: ReceiptIcon },
+      { label: <span class="s">"TVA"</span>,                    href: <span class="s">"vat"</span>,      icon: PercentIcon },
+      { label: <span class="s">"Plan comptable"</span>,         href: <span class="s">"coa"</span>,      icon: BookIcon },
+    ],
+  },
+
+  taskTypes: {
+    <span class="s">"accounting.bank_rec"</span>:     { renderer: BankRecPage,   listItem: BankRecRow,   pill: <span class="s">"Rapprochement"</span> },
+    <span class="s">"accounting.expense_cat"</span>:  { renderer: ExpenseScan,   listItem: ExpenseRow,   pill: <span class="s">"Dépenses"</span> },
+    <span class="s">"accounting.vat_return"</span>:   { renderer: VatReturn,     listItem: VatRow,       pill: <span class="s">"TVA"</span> },
+    <span class="s">"accounting.coa_setup"</span>:    { renderer: CoaSetup,      listItem: CoaRow,       pill: <span class="s">"Plan compt."</span> },
+  },
+
+  messageTypes: {
+    <span class="c">// cartes typées rendues directement dans les fils</span>
+    <span class="s">"accounting.vat_summary"</span>: { renderer: VatSummaryCard },
+    <span class="s">"accounting.recon_done"</span>:  { renderer: ReconDoneCard },
+  },
+
+  artifacts: {
+    <span class="c">// générés automatiquement à l'approbation de la tâche</span>
+    <span class="s">"accounting.bank_rec"</span>: [
+      { id: <span class="s">"recon-statement"</span>, render: renderReconStatement, mime: <span class="s">"application/pdf"</span> },
+      { id: <span class="s">"adjustments"</span>,    render: renderAdjustments,    mime: <span class="s">"text/csv"</span> },
+    ],
+  },
+
+  prerequisites: {
+    <span class="s">"accounting.expense_cat"</span>: [
+      { id: <span class="s">"coa-exists"</span>, check: hasAnyAccounts,
+        fix: { taskType: <span class="s">"accounting.coa_setup"</span>, autoOffer: <span class="k">true</span> } },
+    ],
+    <span class="s">"accounting.vat_return"</span>: [
+      { id: <span class="s">"period-expense-cats-approved"</span>, check: allExpenseCatsApprovedInPeriod },
+    ],
+  },
+
+  guardrails: {
+    <span class="s">"accounting.vat_return"</span>: {
+      statuses: [<span class="s">"draft"</span>, <span class="s">"firm_approved"</span>, <span class="s">"filed"</span>, <span class="s">"superseded"</span>],
+      reopenPolicy: {
+        draft: <span class="s">"free"</span>,
+        firm_approved: { requires: <span class="s">"admin"</span>, reason: <span class="s">"required"</span> },
+        filed: <span class="s">"blocked"</span>,  <span class="c">// doit passer par un amendement</span>
+      },
+      locks: { <span class="s">"ledger_entries.vat.*"</span>: <span class="s">"period"</span> },
+      amendmentTask: <span class="s">"accounting.vat_amendment"</span>,
+    },
+  },
+
+  aiTools: [
+    { name: <span class="s">"start_bank_reconciliation"</span>, handler: api.modules.accounting.bankRec.start, ... },
+    { name: <span class="s">"categorize_receipt"</span>,        handler: api.modules.accounting.expenses.classify, ... },
+    { name: <span class="s">"summarize_period"</span>,          handler: api.modules.accounting.reports.summarize, ... },
+  ],
+
+  calendarContributors: [generateVatDeadlines, generateYearEndEvents],
+  eventHandlers: { <span class="s">"document.uploaded"</span>: maybeRouteToReceiptScan },
+  documentClassifiers: [classifyInvoice, classifyReceipt, classifyStatement],
+};</code></pre>
+
+  <h3 lang="en">The key principle</h3>
+  <h3 lang="fr">Le principe clé</h3>
+  <p lang="en">The manifest is <strong>declarative</strong>. The core does the work of wiring it in. A module never imports core internals; it only exposes things to be wired. This makes modules independent, testable, and uninstallable without breakage.</p>
+  <p lang="fr">Le manifeste est <strong>déclaratif</strong>. C'est le socle qui fait le travail de câblage. Un module n'importe jamais d'internes du socle ; il ne fait qu'exposer des choses à brancher. Cela rend les modules indépendants, testables et désinstallables sans casse.</p>
+
+  <div class="callout" lang="en">
+    <div class="callout-title">Core is also a module</div>
+    <p>The <code>core</code> module is itself registered through the same manifest contract, just marked <code>isBuiltIn: true</code>. It contributes generic task types (<code>core.todo</code>, <code>core.document_request</code>, <code>core.review</code>, <code>core.meeting</code>), the universal AI tools, and the default nav. This means there's no special path for "core features" — same registration, same renderers, same everything.</p>
+  </div>
+  <div class="callout" lang="fr">
+    <div class="callout-title">Le socle est aussi un module</div>
+    <p>Le module <code>core</code> est lui-même enregistré via le même contrat de manifeste, simplement marqué <code>isBuiltIn: true</code>. Il fournit des types de tâches génériques (<code>core.todo</code>, <code>core.document_request</code>, <code>core.review</code>, <code>core.meeting</code>), les outils universels de l'IA et la navigation par défaut. Aucun chemin spécial pour les « fonctions du socle » — même enregistrement, mêmes rendus, même tout.</p>
+  </div>
+
+  <h3 lang="en">First-party for now</h3>
+  <h3 lang="fr">Premiers modules en interne</h3>
+  <p lang="en">All modules are built by the Cockpit team. The manifest can rely on direct TypeScript imports of core types and Convex function references. No sandboxing, no public plugin API yet. If a third-party marketplace ever becomes a product goal, the manifest's shape is the natural place to define a stable contract.</p>
+  <p lang="fr">Tous les modules sont construits par l'équipe Cockpit. Le manifeste peut s'appuyer sur des imports TypeScript directs des types du socle et des références aux fonctions Convex. Pas de bac à sable, pas d'API publique de plugin pour l'instant. Si un jour une marketplace tierce devient un objectif produit, la forme du manifeste sera l'endroit naturel pour définir un contrat stable.</p>
+</section>
+
+<!-- 5. OUTPUTS -->
+<section id="outputs">
+  <span class="section-num" lang="en">05 · Outputs</span>
+  <span class="section-num" lang="fr">05 · Sorties</span>
+  <h2 lang="en">Substrate / Artifact / Card</h2>
+  <h2 lang="fr">Substrat / Artefact / Carte</h2>
+  <p lang="en">Every task in Cockpit produces output in three distinct shapes. Confusing them is what makes work feel cluttered. We name them deliberately.</p>
+  <p lang="fr">Chaque tâche dans Cockpit produit des sorties sous trois formes distinctes. Les confondre, c'est ce qui rend le travail confus. On les nomme délibérément.</p>
+
+  <div class="three-shapes" lang="en">
+    <div class="shape"><div class="num">01</div><h4>Substrate</h4><p>Structured, queryable, long-lived state owned by a module. Lives in per-module tables (<code>accounts</code>, <code>ledger_entries</code>, <code>signature_requests</code>). Mutated <em>only</em> by approved tasks. Source of truth.</p></div>
+    <div class="shape"><div class="num">02</div><h4>Artifact</h4><p>A rendered deliverable — usually a PDF or CSV — produced from substrate at a point in time. Lives in <code>documents</code>. Frozen at creation. Can re-render newer versions from current substrate.</p></div>
+    <div class="shape"><div class="num">03</div><h4>Card</h4><p>A typed thread message ("VAT return ready", "March bank rec balanced"). Lives in <code>messages</code>. Time-stamped, never edited. Optionally client-visible.</p></div>
+  </div>
+  <div class="three-shapes" lang="fr">
+    <div class="shape"><div class="num">01</div><h4>Substrat</h4><p>État structuré, interrogeable, à long terme, détenu par un module. Vit dans des tables propres au module (<code>accounts</code>, <code>ledger_entries</code>, <code>signature_requests</code>). Modifié <em>uniquement</em> par des tâches approuvées. Source de vérité.</p></div>
+    <div class="shape"><div class="num">02</div><h4>Artefact</h4><p>Un livrable rendu — généralement un PDF ou un CSV — produit à partir du substrat à un instant donné. Vit dans <code>documents</code>. Figé à la création. On peut re-générer une version plus récente à partir du substrat actuel.</p></div>
+    <div class="shape"><div class="num">03</div><h4>Carte</h4><p>Un message typé dans un fil (« Déclaration de TVA prête », « Rapprochement de mars équilibré »). Vit dans <code>messages</code>. Horodaté, jamais édité. Optionnellement visible par le client.</p></div>
+  </div>
+
+  <p lang="en"><strong>Why this matters:</strong> A bank reconciliation task is <em>not</em> "a PDF report." The PDF is a byproduct. The actual output is the substrate — the matched ledger entries, the closed period. The PDF is one presentation of that substrate. Cards are how the firm and client find out it happened.</p>
+  <p lang="fr"><strong>Pourquoi c'est important :</strong> une tâche de rapprochement bancaire n'<em>est pas</em> « un rapport PDF ». Le PDF est un sous-produit. La vraie sortie, c'est le substrat — les écritures rapprochées, la période close. Le PDF est une présentation parmi d'autres de ce substrat. Les cartes sont la façon dont le cabinet et le client apprennent que c'est fait.</p>
+
+  <p lang="en">Once you accept this, every task's lifecycle has the same shape:</p>
+  <p lang="fr">Une fois ce modèle accepté, le cycle de vie de chaque tâche a la même forme :</p>
+
+  <div class="diagram" lang="en">  DRAFT ── ingest ──► REVIEW ── approve ──► COMMITTED
+   │                    ▲           │              │
+   │   (humans + AI     │           │              │ side effects fire:
+   │    edit draft)     │           │              ├─ write to substrate
+   │                    │           │              ├─ generate artifact(s) → documents
+   │                    │           │              └─ post card(s) → thread(s)
+   ▼                    │           ▼
+ cancel                 └── reopen (if guardrails allow)</div>
+  <div class="diagram" lang="fr">  BROUILLON ── intake ──► REVUE ── approbation ──► VALIDÉE
+   │                       ▲           │              │
+   │   (humains + IA       │           │              │ effets de bord :
+   │    éditent)           │           │              ├─ écriture dans le substrat
+   │                       │           │              ├─ génération d'artefact(s) → documents
+   │                       │           │              └─ publication de carte(s) → fil(s)
+   ▼                       │           ▼
+ annulée                   └── réouverture (si les garde-fous l'autorisent)</div>
+
+  <p lang="en">Approval is the <strong>only</strong> time substrate gets written. That single chokepoint is what makes the system auditable.</p>
+  <p lang="fr">L'approbation est le <strong>seul</strong> moment où le substrat est écrit. Ce goulot d'étranglement unique est ce qui rend le système auditable.</p>
+</section>
+
+<!-- 6. LIFECYCLE -->
+<section id="lifecycle">
+  <span class="section-num" lang="en">06 · Lifecycle</span>
+  <span class="section-num" lang="fr">06 · Cycle de vie</span>
+  <h2 lang="en">Task Lifecycle &amp; Approval</h2>
+  <h2 lang="fr">Cycle de vie &amp; approbation</h2>
+  <p lang="en">Tasks have a per-type status DAG, not a fixed one. Most tasks go <code>draft → review → approved</code>. Some — VAT returns, signature requests, anything with external counterparties — have additional terminal states.</p>
+  <p lang="fr">Les tâches ont un DAG de statuts propre à chaque type, pas un DAG fixe. La plupart suivent <code>brouillon → revue → approuvée</code>. Certaines — déclarations de TVA, demandes de signature, tout ce qui implique une contrepartie externe — ont des états terminaux supplémentaires.</p>
+
+  <p lang="en">Example status sets:</p>
+  <p lang="fr">Exemples d'ensembles de statuts :</p>
+  <ul lang="en">
+    <li><strong>Generic:</strong> <span class="pill pill--draft">draft</span> <span class="pill pill--review">review</span> <span class="pill pill--approved">approved</span></li>
+    <li><strong>VAT return:</strong> <span class="pill pill--draft">draft</span> <span class="pill pill--review">firm_approved</span> <span class="pill pill--filed">filed</span> <span class="pill pill--superseded">superseded</span></li>
+    <li><strong>Blocked by prereqs:</strong> any task can sit in <span class="pill pill--blocked">blocked</span> waiting on its dependencies</li>
+  </ul>
+  <ul lang="fr">
+    <li><strong>Générique :</strong> <span class="pill pill--draft">brouillon</span> <span class="pill pill--review">revue</span> <span class="pill pill--approved">approuvée</span></li>
+    <li><strong>Déclaration de TVA :</strong> <span class="pill pill--draft">brouillon</span> <span class="pill pill--review">validée cabinet</span> <span class="pill pill--filed">déposée</span> <span class="pill pill--superseded">remplacée</span></li>
+    <li><strong>Bloquée par prérequis :</strong> n'importe quelle tâche peut rester en <span class="pill pill--blocked">bloquée</span> en attendant ses dépendances</li>
+  </ul>
+
+  <h3 lang="en">Reopens are audit-logged</h3>
+  <h3 lang="fr">Les réouvertures sont audit-loguées</h3>
+  <p lang="en">Approved tasks can be reopened by admins with a written reason. Every reopen, edit, and re-approval lands in <code>audit_log</code>. The framework also stores an <strong>approval snapshot</strong> of every side effect that fired — substrate writes, generated artifacts, posted cards. Reopens walk that snapshot in reverse and undo it. Reapproval generates a fresh snapshot.</p>
+  <p lang="fr">Les tâches approuvées peuvent être rouvertes par les admins avec un motif écrit. Chaque réouverture, modification et nouvelle approbation atterrit dans <code>audit_log</code>. Le framework stocke aussi un <strong>instantané d'approbation</strong> de chaque effet de bord déclenché — écritures sur le substrat, artefacts générés, cartes publiées. Une réouverture parcourt cet instantané en sens inverse et l'annule. Une nouvelle approbation génère un nouvel instantané.</p>
+
+  <h3 lang="en">Amendments are first-class</h3>
+  <h3 lang="fr">Les amendements sont de premier rang</h3>
+  <p lang="en">Some terminal states are hard-locked — a filed VAT return, a signed contract, a notarized deed. They can't be reopened. Corrections go through an <strong>amendment task</strong>: a brand-new task of the same shape, with <code>amendsTaskId</code> pointing at the original. The original stays exactly as filed. The amendment goes through its own lifecycle.</p>
+  <p lang="fr">Certains états terminaux sont verrouillés à dur — une déclaration de TVA déposée, un contrat signé, un acte notarié. On ne peut pas les rouvrir. Les corrections passent par une <strong>tâche d'amendement</strong> : une toute nouvelle tâche de même forme, avec <code>amendsTaskId</code> pointant vers l'originale. L'originale reste exactement telle qu'elle a été déposée. L'amendement suit son propre cycle de vie.</p>
+
+  <div class="callout" lang="en">
+    <div class="callout-title">Why this is worth the complexity</div>
+    <p>Real accounting and notary work has legal weight. "Edit this filed return" is the wrong mental model — it's <em>amend the filed return with a new return that supersedes it</em>. Modeling that in the core means every module that ships a "legally binding" workflow gets the right shape for free.</p>
+  </div>
+  <div class="callout" lang="fr">
+    <div class="callout-title">Pourquoi cette complexité en vaut la peine</div>
+    <p>La comptabilité et le notariat ont un poids juridique réel. « Modifier la déclaration déposée » est le mauvais modèle mental — il faut <em>amender la déclaration déposée par une nouvelle qui la remplace</em>. Modéliser cela dans le socle signifie que chaque module qui livre un flux à valeur juridique récupère gratuitement la bonne forme.</p>
+  </div>
+
+  <h3 lang="en">Guardrails are declared, not coded</h3>
+  <h3 lang="fr">Les garde-fous sont déclarés, pas codés</h3>
+  <p lang="en">Each task type's manifest declares its reopen policy and the substrate fields that lock when it reaches a given status. The framework enforces these on every write. Modules don't write enforcement code — they write a config object.</p>
+  <p lang="fr">Le manifeste de chaque type de tâche déclare sa politique de réouverture et les champs du substrat qui se verrouillent quand elle atteint un statut donné. Le framework les applique à chaque écriture. Les modules n'écrivent pas de code d'application — ils écrivent un objet de configuration.</p>
+</section>
+
+<!-- 7. DEPS -->
+<section id="deps">
+  <span class="section-num" lang="en">07 · Dependencies</span>
+  <span class="section-num" lang="fr">07 · Dépendances</span>
+  <h2 lang="en">Dependencies &amp; Prerequisites</h2>
+  <h2 lang="fr">Dépendances &amp; prérequis</h2>
+  <p lang="en">Tasks depend on other things being in place. Expense categorization needs a chart of accounts. Bank reconciliation needs a bank statement. VAT returns need their period's expense cats approved. The core handles this declaratively so modules don't reinvent workflow logic.</p>
+  <p lang="fr">Les tâches dépendent d'autres choses qui doivent être en place. La catégorisation des dépenses a besoin d'un plan comptable. Le rapprochement bancaire a besoin d'un relevé bancaire. Les déclarations de TVA ont besoin que les catégorisations de dépenses de la période soient approuvées. Le socle gère cela de manière déclarative pour que les modules ne réinventent pas la logique de flux.</p>
+
+  <h3 lang="en">Three kinds of prerequisite</h3>
+  <h3 lang="fr">Trois types de prérequis</h3>
+  <table lang="en">
+    <thead><tr><th>Kind</th><th>Example</th><th>Check against</th></tr></thead>
+    <tbody>
+      <tr><td>Config</td><td>"Chart of accounts must exist"</td><td>Substrate tables</td></tr>
+      <tr><td>Document</td><td>"Bank statement for period uploaded"</td><td><code>documents</code></td></tr>
+      <tr><td>Task</td><td>"All expense cats in period approved"</td><td><code>tasks</code></td></tr>
+    </tbody>
+  </table>
+  <table lang="fr">
+    <thead><tr><th>Type</th><th>Exemple</th><th>Vérifié contre</th></tr></thead>
+    <tbody>
+      <tr><td>Configuration</td><td>« Le plan comptable doit exister »</td><td>Tables du substrat</td></tr>
+      <tr><td>Document</td><td>« Le relevé bancaire de la période est téléversé »</td><td><code>documents</code></td></tr>
+      <tr><td>Tâche</td><td>« Toutes les catég. de dépenses de la période sont approuvées »</td><td><code>tasks</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3 lang="en">Live, not one-shot</h3>
+  <h3 lang="fr">En direct, pas une fois pour toutes</h3>
+  <p lang="en">Prereqs are not just checked at task creation. Every write to substrate, documents, or tasks recomputes the prereqs of any task that listed them as dependencies. If a prereq becomes unmet later (e.g. an expense cat is reopened), the dependent VAT return drops back to <span class="pill pill--blocked">blocked</span> and a card posts to the internal thread.</p>
+  <p lang="fr">Les prérequis ne sont pas seulement vérifiés à la création de la tâche. Chaque écriture sur le substrat, les documents ou les tâches recalcule les prérequis de toute tâche qui les a listés comme dépendances. Si un prérequis devient invalide plus tard (par ex. une catég. de dépenses est rouverte), la déclaration de TVA dépendante retombe en <span class="pill pill--blocked">bloquée</span> et une carte est publiée dans le fil interne.</p>
+
+  <h3 lang="en">The discoverability payoff</h3>
+  <h3 lang="fr">Le gain de découvrabilité</h3>
+  <p lang="en">This isn't just gating — it's <em>guidance</em>. New customer onboarding becomes "follow the prereq DAG from the leaves." The customer dashboard shows an "Available now" panel of unblocked tasks. The AI can plan: "You're three prereqs away from filing Q1 VAT — want me to set up the missing pieces?"</p>
+  <p lang="fr">Ce n'est pas qu'un simple verrou — c'est un <em>guide</em>. L'onboarding d'un nouveau client devient « suivre le DAG de prérequis depuis les feuilles ». Le tableau de bord client affiche un panneau « Disponible maintenant » de tâches non bloquées. L'IA peut planifier : « Il vous reste trois prérequis avant de déposer la TVA du T1 — vous voulez que je mette en place les pièces manquantes ? »</p>
+
+  <pre lang="en"><code><span class="c">// modules/accounting/manifest.ts</span>
+prerequisites: {
+  <span class="s">"accounting.expense_cat"</span>: [
+    {
+      id: <span class="s">"coa-exists"</span>,
+      kind: <span class="s">"config"</span>,
+      label: <span class="s">"Chart of accounts must be set up"</span>,
+      check: <span class="k">async</span> (ctx, { customerId }) => hasAnyAccounts(ctx, customerId),
+      fix: { taskType: <span class="s">"accounting.coa_setup"</span>, autoOffer: <span class="k">true</span> },
+    },
+    {
+      id: <span class="s">"receipts-present"</span>,
+      kind: <span class="s">"documents"</span>,
+      label: <span class="s">"At least one receipt uploaded for the period"</span>,
+      check: <span class="k">async</span> (ctx, { customerId, period }) => hasReceipts(ctx, customerId, period),
+    },
+  ],
+}</code></pre>
+  <pre lang="fr"><code><span class="c">// modules/accounting/manifest.ts</span>
+prerequisites: {
+  <span class="s">"accounting.expense_cat"</span>: [
+    {
+      id: <span class="s">"coa-exists"</span>,
+      kind: <span class="s">"config"</span>,
+      label: <span class="s">"Le plan comptable doit être paramétré"</span>,
+      check: <span class="k">async</span> (ctx, { customerId }) => hasAnyAccounts(ctx, customerId),
+      fix: { taskType: <span class="s">"accounting.coa_setup"</span>, autoOffer: <span class="k">true</span> },
+    },
+    {
+      id: <span class="s">"receipts-present"</span>,
+      kind: <span class="s">"documents"</span>,
+      label: <span class="s">"Au moins un justificatif téléversé pour la période"</span>,
+      check: <span class="k">async</span> (ctx, { customerId, period }) => hasReceipts(ctx, customerId, period),
+    },
+  ],
+}</code></pre>
+</section>
+
+<!-- 8. AUTH -->
+<section id="auth">
+  <span class="section-num" lang="en">08 · Authorization</span>
+  <span class="section-num" lang="fr">08 · Autorisations</span>
+  <h2 lang="en">Authorization &amp; Audiences</h2>
+  <h2 lang="fr">Autorisations &amp; audiences</h2>
+  <p lang="en">Cockpit has two user populations on a single Clerk app, and within firm members it has roles and customer-scoping. The core <code>getActor(ctx)</code> helper is the single source of truth for permissions.</p>
+  <p lang="fr">Cockpit a deux populations d'utilisateurs sur une seule application Clerk, et au sein des membres du cabinet il y a des rôles et un périmètre par client. Le helper <code>getActor(ctx)</code> du socle est la source unique de vérité pour les permissions.</p>
+
+  <h3 lang="en">Firm members</h3>
+  <h3 lang="fr">Membres du cabinet</h3>
+  <table lang="en">
+    <thead><tr><th>Role</th><th>Can do</th></tr></thead>
+    <tbody>
+      <tr><td>Owner</td><td>Everything an admin can do, plus billing and workspace transfer.</td></tr>
+      <tr><td>Admin</td><td>Invite members, assign customers, install/configure modules, reopen tasks.</td></tr>
+      <tr><td>Member</td><td>Do the work. Can be scoped to all customers or only assigned ones.</td></tr>
+    </tbody>
+  </table>
+  <table lang="fr">
+    <thead><tr><th>Rôle</th><th>Peut faire</th></tr></thead>
+    <tbody>
+      <tr><td>Propriétaire</td><td>Tout ce qu'un admin peut faire, plus la facturation et le transfert de l'espace.</td></tr>
+      <tr><td>Admin</td><td>Inviter des membres, affecter des clients, installer/configurer des modules, rouvrir des tâches.</td></tr>
+      <tr><td>Membre</td><td>Faire le travail. Peut être limité à tous les clients ou seulement à ceux qui lui sont affectés.</td></tr>
+    </tbody>
+  </table>
+
+  <p lang="en"><code>memberships.scope</code> is either <code>"all"</code> or <code>"assigned_only"</code>. Assigned-only members see customers through <code>customer_assignments</code> rows, never others.</p>
+  <p lang="fr"><code>memberships.scope</code> vaut soit <code>"all"</code>, soit <code>"assigned_only"</code>. Les membres limités voient les clients via les lignes <code>customer_assignments</code>, jamais les autres.</p>
+
+  <h3 lang="en">Clients</h3>
+  <h3 lang="fr">Clients</h3>
+  <p lang="en">Clients are plain Clerk users (not org members) linked to specific customers via <code>customer_access</code>. This lets a client span multiple firms if needed (one client uses an accountant <em>and</em> a notary on the same business). They sign in normally and land in a separate route group, <code>app/(portal)/</code>, with a stripped-down shell.</p>
+  <p lang="fr">Les clients sont de simples utilisateurs Clerk (pas membres d'organisation) liés à des clients spécifiques via <code>customer_access</code>. Cela permet à un client d'être lié à plusieurs cabinets si besoin (un même client utilise un expert-comptable <em>et</em> un notaire pour la même entreprise). Ils se connectent normalement et atterrissent dans un groupe de routes séparé, <code>app/(portal)/</code>, avec une coque allégée.</p>
+
+  <h3 lang="en">What the client sees</h3>
+  <h3 lang="fr">Ce que le client voit</h3>
+  <ul lang="en">
+    <li><strong>Documents</strong> flagged <code>visibility: "shared"</code> — the firm has explicitly shared them.</li>
+    <li><strong>Messages</strong> in threads with <code>audience: "client"</code>.</li>
+    <li><strong>Tasks</strong> with <code>clientVisible: true</code> — e.g. "please upload your March bank statement," "please review and sign."</li>
+    <li><strong>Their own uploads</strong> — anything they put in the portal.</li>
+  </ul>
+  <ul lang="fr">
+    <li><strong>Documents</strong> marqués <code>visibility: "shared"</code> — le cabinet les a partagés explicitement.</li>
+    <li><strong>Messages</strong> dans les fils avec <code>audience: "client"</code>.</li>
+    <li><strong>Tâches</strong> avec <code>clientVisible: true</code> — par ex. « merci de téléverser votre relevé bancaire de mars », « merci de relire et signer ».</li>
+    <li><strong>Ses propres téléversements</strong> — tout ce qu'il dépose dans le portail.</li>
+  </ul>
+  <p lang="en">The client <em>never</em> sees the ledger, the chart of accounts, or any module substrate directly. They see nicely formatted artifacts and human-written cards. This separation is enforced at the query layer.</p>
+  <p lang="fr">Le client ne voit <em>jamais</em> le grand livre, le plan comptable ou le substrat d'un module directement. Il voit des artefacts joliment formatés et des cartes rédigées par des humains. Cette séparation est imposée au niveau de la couche de requêtes.</p>
+
+  <h3 lang="en">getActor — one source of truth</h3>
+  <h3 lang="fr">getActor — source unique de vérité</h3>
+  <pre lang="en"><code><span class="c">// convex/lib/auth.ts</span>
+<span class="k">export async function</span> getActor(ctx): <span class="t">Promise&lt;Actor&gt;</span> {
+  <span class="k">const</span> identity = <span class="k">await</span> ctx.auth.getUserIdentity();
+  <span class="k">if</span> (!identity) <span class="k">throw new</span> ConvexError(<span class="s">"unauthenticated"</span>);
+
+  <span class="k">const</span> user = <span class="k">await</span> userByClerkId(ctx, identity.subject);
+
+  <span class="c">// firm member?</span>
+  <span class="k">const</span> membership = <span class="k">await</span> activeMembership(ctx, user._id);
+  <span class="k">if</span> (membership) {
+    <span class="k">return</span> {
+      kind: <span class="s">"member"</span>,
+      userId: user._id,
+      workspaceId: membership.workspaceId,
+      role: membership.role,
+      scope: membership.scope,
+      canSeeCustomer: (id) => membership.scope === <span class="s">"all"</span> || hasAssignment(ctx, user._id, id),
+      canManageTeam: () => [<span class="s">"owner"</span>, <span class="s">"admin"</span>].includes(membership.role),
+      canManageModules: () => [<span class="s">"owner"</span>, <span class="s">"admin"</span>].includes(membership.role),
+    };
+  }
+
+  <span class="c">// client?</span>
+  <span class="k">const</span> accesses = <span class="k">await</span> customerAccessByUser(ctx, user._id);
+  <span class="k">if</span> (accesses.length > 0) {
+    <span class="k">return</span> {
+      kind: <span class="s">"client"</span>,
+      userId: user._id,
+      customerAccessIds: accesses.map(a => a.customerId),
+    };
+  }
+
+  <span class="k">throw new</span> ConvexError(<span class="s">"no access"</span>);
+}</code></pre>
+  <pre lang="fr"><code><span class="c">// convex/lib/auth.ts</span>
+<span class="k">export async function</span> getActor(ctx): <span class="t">Promise&lt;Actor&gt;</span> {
+  <span class="k">const</span> identity = <span class="k">await</span> ctx.auth.getUserIdentity();
+  <span class="k">if</span> (!identity) <span class="k">throw new</span> ConvexError(<span class="s">"unauthenticated"</span>);
+
+  <span class="k">const</span> user = <span class="k">await</span> userByClerkId(ctx, identity.subject);
+
+  <span class="c">// membre du cabinet ?</span>
+  <span class="k">const</span> membership = <span class="k">await</span> activeMembership(ctx, user._id);
+  <span class="k">if</span> (membership) {
+    <span class="k">return</span> {
+      kind: <span class="s">"member"</span>,
+      userId: user._id,
+      workspaceId: membership.workspaceId,
+      role: membership.role,
+      scope: membership.scope,
+      canSeeCustomer: (id) => membership.scope === <span class="s">"all"</span> || hasAssignment(ctx, user._id, id),
+      canManageTeam: () => [<span class="s">"owner"</span>, <span class="s">"admin"</span>].includes(membership.role),
+      canManageModules: () => [<span class="s">"owner"</span>, <span class="s">"admin"</span>].includes(membership.role),
+    };
+  }
+
+  <span class="c">// client ?</span>
+  <span class="k">const</span> accesses = <span class="k">await</span> customerAccessByUser(ctx, user._id);
+  <span class="k">if</span> (accesses.length > 0) {
+    <span class="k">return</span> {
+      kind: <span class="s">"client"</span>,
+      userId: user._id,
+      customerAccessIds: accesses.map(a => a.customerId),
+    };
+  }
+
+  <span class="k">throw new</span> ConvexError(<span class="s">"no access"</span>);
+}</code></pre>
+  <p lang="en">Every Convex function calls <code>getActor</code> first. No exceptions.</p>
+  <p lang="fr">Chaque fonction Convex appelle <code>getActor</code> en premier. Sans exception.</p>
+</section>
+
+<!-- 9. CHAT -->
+<section id="chat">
+  <span class="section-num" lang="en">09 · Chat</span>
+  <span class="section-num" lang="fr">09 · Messagerie</span>
+  <h2 lang="en">Chat Surfaces</h2>
+  <h2 lang="fr">Surfaces de messagerie</h2>
+  <p lang="en">One data model, four thread types. Each thread has an explicit member list (<code>thread_members</code>) and a defined audience.</p>
+  <p lang="fr">Un seul modèle de données, quatre types de fils. Chaque fil a une liste explicite de membres (<code>thread_members</code>) et une audience définie.</p>
+
+  <table lang="en">
+    <thead><tr><th>Thread type</th><th>Created when</th><th>Members</th><th>Audience</th></tr></thead>
+    <tbody>
+      <tr><td>Customer internal</td><td>Customer is created</td><td>Firm members with access</td><td>Firm only</td></tr>
+      <tr><td>Customer client</td><td>Client portal activated for customer</td><td>Firm members + the client</td><td>Both</td></tr>
+      <tr><td>Team DM</td><td>User A messages user B</td><td>Just A &amp; B</td><td>Firm only</td></tr>
+      <tr><td>Team channel</td><td>Admin creates a channel</td><td>All members (public) or explicit list (private)</td><td>Firm only</td></tr>
+    </tbody>
+  </table>
+  <table lang="fr">
+    <thead><tr><th>Type de fil</th><th>Créé quand</th><th>Membres</th><th>Audience</th></tr></thead>
+    <tbody>
+      <tr><td>Client interne</td><td>Le client est créé</td><td>Membres du cabinet avec accès</td><td>Cabinet uniquement</td></tr>
+      <tr><td>Client client</td><td>Portail client activé pour le client</td><td>Membres du cabinet + le client</td><td>Les deux</td></tr>
+      <tr><td>DM équipe</td><td>Un utilisateur écrit à un autre</td><td>Eux deux</td><td>Cabinet uniquement</td></tr>
+      <tr><td>Canal d'équipe</td><td>Un admin crée un canal</td><td>Tous les membres (public) ou liste explicite (privé)</td><td>Cabinet uniquement</td></tr>
+    </tbody>
+  </table>
+
+  <h3 lang="en">Two entry points in the UI</h3>
+  <h3 lang="fr">Deux points d'entrée dans l'interface</h3>
+  <ul lang="en">
+    <li><strong>Customer chat</strong> — when inside a customer, see Internal / Client tabs for that customer's two threads.</li>
+    <li><strong>Team chat</strong> — top-level nav, Slack-style: DMs in a list, channels in a list, default <code>#general</code> channel auto-created with the workspace.</li>
+  </ul>
+  <ul lang="fr">
+    <li><strong>Messagerie client</strong> — quand on est dans un client, voir les onglets Interne / Client pour les deux fils de ce client.</li>
+    <li><strong>Messagerie d'équipe</strong> — navigation de premier niveau, à la Slack : DM dans une liste, canaux dans une autre, canal <code>#general</code> par défaut créé automatiquement avec l'espace.</li>
+  </ul>
+
+  <h3 lang="en">Messages can be more than text</h3>
+  <h3 lang="fr">Les messages peuvent être plus que du texte</h3>
+  <p lang="en">Three message kinds:</p>
+  <p lang="fr">Trois types de messages :</p>
+  <ul lang="en">
+    <li><code>text</code> — plain message, attachments allowed, supports <code>@mentions</code>.</li>
+    <li><code>card</code> — a typed module payload (e.g. <code>accounting.vat_summary</code>). Rendered by the module that registered the type. Lets the system speak with structure: "Q1 VAT ready: MUR 47,200 payable. [Approve] [Review]."</li>
+    <li><code>system</code> — audit-style entries: "Cockpit ran <code>find_uncategorized_expenses</code>, 12 results." Not user-written.</li>
+  </ul>
+  <ul lang="fr">
+    <li><code>text</code> — message simple, pièces jointes autorisées, supporte les <code>@mentions</code>.</li>
+    <li><code>card</code> — une charge utile typée d'un module (par ex. <code>accounting.vat_summary</code>). Rendue par le module qui a enregistré ce type. Permet au système de s'exprimer avec structure : « TVA T1 prête : MUR 47 200 à payer. [Approuver] [Réviser]. »</li>
+    <li><code>system</code> — entrées de type audit : « Tour de Contrôle a exécuté <code>find_uncategorized_expenses</code>, 12 résultats. » Non écrites par l'utilisateur.</li>
+  </ul>
+
+  <h3 lang="en">Documents shared in chat go to the document manager</h3>
+  <h3 lang="fr">Les documents partagés en messagerie vont dans le gestionnaire de documents</h3>
+  <p lang="en">Anything attached to a message in a customer thread is also a row in <code>documents</code>, with <code>source: "chat"</code> and <code>threadMessageId</code> set. So uploads from chat are first-class — they show up in the documents page, searchable and tag-able like any other file.</p>
+  <p lang="fr">Toute pièce jointe à un message dans un fil client est aussi une ligne dans <code>documents</code>, avec <code>source: "chat"</code> et <code>threadMessageId</code> renseigné. Les téléversements depuis la messagerie sont donc de premier rang — ils apparaissent dans la page documents, cherchables et étiquetables comme n'importe quel fichier.</p>
+
+  <h3 lang="en">Mentions land in the Inbox</h3>
+  <h3 lang="fr">Les mentions atterrissent dans la boîte de réception</h3>
+  <p lang="en">Every <code>@user</code> in a message creates an <code>inbox_items</code> entry for that user. Their inbox already aggregates task reviews, signature requests, etc. — mentions just join the same stream.</p>
+  <p lang="fr">Chaque <code>@utilisateur</code> dans un message crée une entrée <code>inbox_items</code> pour cet utilisateur. Sa boîte de réception agrège déjà les revues de tâches, demandes de signature, etc. — les mentions rejoignent simplement le même flux.</p>
+</section>
+
+<!-- 10. CONTROL TOWER -->
+<section id="control-tower">
+  <span class="section-num" lang="en">10 · Control Tower</span>
+  <span class="section-num" lang="fr">10 · Tour de Contrôle</span>
+  <h2 lang="en">Control Tower — The AI Assistant</h2>
+  <h2 lang="fr">Tour de Contrôle — l'assistant IA</h2>
+  <p lang="en">The AI is named <strong>Control Tower</strong>. It's a participant in chat (a <code>users</code> row with <code>kind: "ai"</code>), but its <em>home</em> is a dedicated right-rail surface that adds richer affordances on top of the same underlying thread.</p>
+  <p lang="fr">L'IA s'appelle <strong>Tour de Contrôle</strong>. C'est un participant à la messagerie (une ligne <code>users</code> avec <code>kind: "ai"</code>), mais sa <em>maison</em> est une surface dédiée dans le rail droit qui ajoute des fonctions plus riches au-dessus du même fil sous-jacent.</p>
+
+  <h3 lang="en">The Control Tower panel</h3>
+  <h3 lang="fr">Le panneau Tour de Contrôle</h3>
+  <div class="diagram" lang="en">┌─────────────────────────────────────────────────────────┐
+│  🗼 Control Tower                                   ⋯ × │
+├─────────────────────────────────────────────────────────┤
+│  Context: ● Customer: ABC Trading  ● Period: March 2026 │ ← editable chips
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│   You: Take a first pass at the new receipts            │
+│                                                         │
+│   🗼 Control Tower                                      │
+│   Found 28 receipts uploaded since yesterday.           │
+│   2 are duplicates (Vivo Energy, 12 Mar).               │
+│                                                         │
+│   I'd suggest:                                          │
+│   • 24 receipts → existing accounts (high confidence)   │
+│   • 4 receipts → add new "5210 — Conference Fees"       │
+│                                                         │
+│   [▸ Approve plan]  [Customize]  [Cancel]               │ ← action card
+│                                                         │
+├─────────────────────────────────────────────────────────┤
+│  Suggested next: "Draft VAT summary"  "Find duplicates" │
+│  💬 Ask anything…                              📎  ⏎    │
+└─────────────────────────────────────────────────────────┘</div>
+  <div class="diagram" lang="fr">┌─────────────────────────────────────────────────────────┐
+│  🗼 Tour de Contrôle                                ⋯ × │
+├─────────────────────────────────────────────────────────┤
+│  Contexte : ● Client : ABC Trading  ● Période : mars 26 │ ← puces éditables
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│   Vous : Fais un premier passage sur les nouveaux reçus │
+│                                                         │
+│   🗼 Tour de Contrôle                                   │
+│   J'ai trouvé 28 reçus téléversés depuis hier.          │
+│   2 sont des doublons (Vivo Energy, 12 mars).           │
+│                                                         │
+│   Je propose :                                          │
+│   • 24 reçus → comptes existants (forte confiance)      │
+│   • 4 reçus → ajouter un nouveau « 5210 — Frais conf. » │
+│                                                         │
+│   [▸ Approuver le plan]  [Personnaliser]  [Annuler]     │ ← carte d'action
+│                                                         │
+├─────────────────────────────────────────────────────────┤
+│  Suggestions : "Rédiger résumé TVA"  "Trouver doublons" │
+│  💬 Posez une question…                        📎  ⏎    │
+└─────────────────────────────────────────────────────────┘</div>
+
+  <h3 lang="en">What makes it different from a chat tab</h3>
+  <h3 lang="fr">Ce qui le distingue d'un onglet de messagerie</h3>
+  <ul lang="en">
+    <li><strong>Context chips</strong> — currently-focused customer, period, document selection. Control Tower scopes its tool calls to these.</li>
+    <li><strong>Tool calls visible inline</strong> — collapsed by default, expandable for the curious. The AI shows its work.</li>
+    <li><strong>Action cards</strong> — when the AI proposes work, you accept/edit/reject in one click. The card becomes a system message in the audit trail.</li>
+    <li><strong>Suggested next steps</strong> — context-aware chips so you don't start from a blank prompt.</li>
+    <li><strong>Persistent</strong> — opens as a right-side drawer; you keep working while it thinks.</li>
+  </ul>
+  <ul lang="fr">
+    <li><strong>Puces de contexte</strong> — client, période et sélection de documents au focus. La Tour cadre ses appels d'outils sur ces éléments.</li>
+    <li><strong>Appels d'outils visibles en ligne</strong> — repliés par défaut, dépliables pour les curieux. L'IA montre son raisonnement.</li>
+    <li><strong>Cartes d'action</strong> — quand l'IA propose un travail, vous acceptez/modifiez/refusez en un clic. La carte devient un message système dans la piste d'audit.</li>
+    <li><strong>Suggestions d'étapes suivantes</strong> — puces contextuelles pour ne pas partir d'une page blanche.</li>
+    <li><strong>Persistant</strong> — s'ouvre en tiroir latéral droit ; vous continuez à travailler pendant qu'il réfléchit.</li>
+  </ul>
+
+  <h3 lang="en">The same AI in other threads</h3>
+  <h3 lang="fr">La même IA dans les autres fils</h3>
+  <p lang="en">@mention "Control Tower" in any customer thread or team channel and it joins as a participant — same brain, simpler affordances (no context chips; it inherits the thread's scope). This means a junior accountant can drop a question into a customer's internal thread and Control Tower will answer there, in front of the team. Useful for collaborative review.</p>
+  <p lang="fr">Mentionnez « Tour de Contrôle » dans n'importe quel fil client ou canal d'équipe et il rejoint la conversation comme un participant — même cerveau, fonctions plus simples (pas de puces de contexte ; il hérite de la portée du fil). Cela signifie qu'un comptable junior peut poser une question dans le fil interne d'un client et la Tour répondra là, devant l'équipe. Utile pour la revue collaborative.</p>
+
+  <h3 lang="en">Tools come from modules</h3>
+  <h3 lang="fr">Les outils viennent des modules</h3>
+  <p lang="en">Each module manifest contributes AI tools (Convex actions the AI can call). Core ships universal tools: <code>create_task</code>, <code>search_documents</code>, <code>schedule_event</code>, <code>post_card</code>, <code>assign_task</code>. Accounting adds <code>start_bank_reconciliation</code>, <code>categorize_receipt</code>, <code>summarize_period</code>. Notary adds <code>create_signature_request</code>, etc. The tool registry the AI sees is composed from <em>installed</em> modules only.</p>
+  <p lang="fr">Chaque manifeste de module apporte des outils d'IA (actions Convex que l'IA peut appeler). Le socle livre des outils universels : <code>create_task</code>, <code>search_documents</code>, <code>schedule_event</code>, <code>post_card</code>, <code>assign_task</code>. La comptabilité ajoute <code>start_bank_reconciliation</code>, <code>categorize_receipt</code>, <code>summarize_period</code>. Le notariat ajoute <code>create_signature_request</code>, etc. Le registre d'outils que l'IA voit est composé à partir des modules <em>installés</em> uniquement.</p>
+
+  <h3 lang="en">Policy guarantees</h3>
+  <h3 lang="fr">Garanties de politique</h3>
+  <div class="callout good" lang="en">
+    <div class="callout-title">Four invariants</div>
+    <p>1. <strong>AI sees what the requester sees.</strong> Tool calls run through <code>getActor</code> of the human, not elevated privileges.<br>
+    2. <strong>AI cannot approve tasks.</strong> Only draft, propose, and prepare. Humans approve.<br>
+    3. <strong>AI cannot edit substrate directly.</strong> Only through tool calls that create reviewable tasks.<br>
+    4. <strong>Every AI action is audit-logged</strong> with <code>actorId: aiUserId, onBehalfOf: humanUserId</code>.</p>
+  </div>
+  <div class="callout good" lang="fr">
+    <div class="callout-title">Quatre invariants</div>
+    <p>1. <strong>L'IA voit ce que voit la personne qui la sollicite.</strong> Les appels d'outils passent par <code>getActor</code> de l'humain, pas avec des privilèges élevés.<br>
+    2. <strong>L'IA ne peut pas approuver les tâches.</strong> Seulement les esquisser, proposer, préparer. Les humains approuvent.<br>
+    3. <strong>L'IA ne peut pas modifier le substrat directement.</strong> Uniquement via des appels d'outils qui créent des tâches à revoir.<br>
+    4. <strong>Chaque action de l'IA est audit-loguée</strong> avec <code>actorId: aiUserId, onBehalfOf: humanUserId</code>.</p>
+  </div>
+  <p lang="en">These four rules keep Control Tower useful without it becoming an unbounded automation engine.</p>
+  <p lang="fr">Ces quatre règles gardent Tour de Contrôle utile sans en faire un moteur d'automatisation sans limites.</p>
+</section>
+
+<!-- 11. CALENDAR -->
+<section id="calendar">
+  <span class="section-num" lang="en">11 · Calendar</span>
+  <span class="section-num" lang="fr">11 · Calendrier</span>
+  <h2 lang="en">Calendar</h2>
+  <h2 lang="fr">Calendrier</h2>
+  <p lang="en">Calendars are workflow infrastructure every industry needs: VAT deadlines, signature expirations, project milestones, client meetings. So calendar is core, not a module — and modules <em>contribute</em> events into it.</p>
+  <p lang="fr">Le calendrier est une infrastructure de flux dont chaque métier a besoin : échéances TVA, expirations de signature, jalons de projet, réunions client. Le calendrier appartient donc au socle, pas à un module — et les modules <em>contribuent</em> des événements à l'intérieur.</p>
+
+  <h3 lang="en">Two automatic sources</h3>
+  <h3 lang="fr">Deux sources automatiques</h3>
+  <ul lang="en">
+    <li><strong>Tasks with <code>dueDate</code></strong> automatically appear — no duplicate row, the calendar query unions tasks with events.</li>
+    <li><strong>Module contributors</strong> — manifest declares <code>calendarContributors</code>. Accounting auto-generates VAT-due events when a customer's filing schedule is set. Notary auto-generates signature deadline events.</li>
+  </ul>
+  <ul lang="fr">
+    <li><strong>Les tâches avec <code>dueDate</code></strong> apparaissent automatiquement — pas de ligne en double, la requête de calendrier fait l'union des tâches et des événements.</li>
+    <li><strong>Les contributeurs de modules</strong> — le manifeste déclare des <code>calendarContributors</code>. La comptabilité génère automatiquement les échéances TVA quand le calendrier de dépôt d'un client est défini. Le notariat génère les échéances de signature.</li>
+  </ul>
+
+  <h3 lang="en">Views</h3>
+  <h3 lang="fr">Vues</h3>
+  <ul lang="en">
+    <li>Workspace agenda — "what's due in the next 7 days across all my customers"</li>
+    <li>Per-customer view — embedded on the customer dashboard</li>
+    <li>Per-user "my schedule" — events where I'm assigned</li>
+    <li>Month / week traditional views</li>
+  </ul>
+  <ul lang="fr">
+    <li>Agenda de l'espace — « ce qui est dû dans les 7 prochains jours, tous clients confondus »</li>
+    <li>Vue par client — intégrée au tableau de bord du client</li>
+    <li>« Mon agenda » par utilisateur — événements où je suis assigné</li>
+    <li>Vues classiques mois / semaine</li>
+  </ul>
+
+  <p lang="en">External calendar sync (Google Calendar, Outlook) is a planned future; the <code>externalRef</code> field is reserved for it.</p>
+  <p lang="fr">La synchronisation avec un calendrier externe (Google Calendar, Outlook) est un futur prévu ; le champ <code>externalRef</code> est réservé pour ça.</p>
+</section>
+
+<!-- 12. NO-MODULE -->
+<section id="no-module">
+  <span class="section-num" lang="en">12 · Core alone</span>
+  <span class="section-num" lang="fr">12 · Socle seul</span>
+  <h2 lang="en">The No-Module Experience</h2>
+  <h2 lang="fr">L'expérience sans module</h2>
+  <p lang="en">Cockpit must be useful to a design agency, a consulting firm, or a freelancer — none of whom install accounting or notary. The core stands on its own.</p>
+  <p lang="fr">Cockpit doit être utile à une agence de design, à un cabinet de conseil ou à un indépendant — aucun d'entre eux n'installe la comptabilité ou le notariat. Le socle tient debout tout seul.</p>
+
+  <h3 lang="en">What core ships</h3>
+  <h3 lang="fr">Ce que livre le socle</h3>
+  <table lang="en">
+    <thead><tr><th>Surface</th><th>Behavior</th></tr></thead>
+    <tbody>
+      <tr><td>Customers</td><td>Full CRUD, assignment, basic info.</td></tr>
+      <tr><td>Documents</td><td>Upload, tag, share, search, version history.</td></tr>
+      <tr><td>Chat</td><td>Customer internal + client threads, team DMs &amp; channels, Control Tower.</td></tr>
+      <tr><td>Calendar</td><td>Manual events + task deadlines. Workspace and per-customer views.</td></tr>
+      <tr><td>Inbox</td><td>Tasks, mentions, document requests pending.</td></tr>
+      <tr><td>Tasks</td><td>Four built-in generic types (below).</td></tr>
+    </tbody>
+  </table>
+  <table lang="fr">
+    <thead><tr><th>Surface</th><th>Comportement</th></tr></thead>
+    <tbody>
+      <tr><td>Clients</td><td>CRUD complet, affectation, infos de base.</td></tr>
+      <tr><td>Documents</td><td>Téléversement, étiquetage, partage, recherche, historique de versions.</td></tr>
+      <tr><td>Messagerie</td><td>Fils client interne + client, DM &amp; canaux d'équipe, Tour de Contrôle.</td></tr>
+      <tr><td>Calendrier</td><td>Événements manuels + échéances de tâches. Vues à l'échelle de l'espace et par client.</td></tr>
+      <tr><td>Boîte de réception</td><td>Tâches, mentions, demandes de documents en attente.</td></tr>
+      <tr><td>Tâches</td><td>Quatre types génériques intégrés (ci-dessous).</td></tr>
+    </tbody>
+  </table>
+
+  <h3 lang="en">Built-in task types</h3>
+  <h3 lang="fr">Types de tâches intégrés</h3>
+  <ul lang="en">
+    <li><code>core.todo</code> — title, description, due date, assignee, attachments, status. The bread-and-butter task.</li>
+    <li><code>core.document_request</code> — "please upload X." Client-portal-native: clients see and respond to it.</li>
+    <li><code>core.review</code> — "please review and approve." Simpler cousin of notary's signature flow.</li>
+    <li><code>core.meeting</code> — title, time, attendees, notes. Also writes a <code>calendar_events</code> row.</li>
+  </ul>
+  <ul lang="fr">
+    <li><code>core.todo</code> — titre, description, échéance, assigné, pièces jointes, statut. La tâche du quotidien.</li>
+    <li><code>core.document_request</code> — « merci de téléverser X ». Native au portail client : le client la voit et y répond.</li>
+    <li><code>core.review</code> — « merci de revoir et d'approuver ». Cousine plus simple du flux de signature du notariat.</li>
+    <li><code>core.meeting</code> — titre, horaire, participants, notes. Écrit aussi une ligne dans <code>calendar_events</code>.</li>
+  </ul>
+
+  <p lang="en">These four cover the bulk of generic service workflows. An agency can use Cockpit without ever looking at a specialist module.</p>
+  <p lang="fr">Ces quatre couvrent l'essentiel des flux de services génériques. Une agence peut utiliser Cockpit sans jamais regarder un module spécialisé.</p>
+
+  <div class="callout" lang="en">
+    <div class="callout-title">Conceptually</div>
+    <p>The <code>core</code> module is <em>also</em> a module — built-in, can't be uninstalled, but registered through the same manifest contract. There's no special path for "core features." Same renderers, same nav contribution, same AI tools. Industry modules just extend what core already does.</p>
+  </div>
+  <div class="callout" lang="fr">
+    <div class="callout-title">Sur le plan conceptuel</div>
+    <p>Le module <code>core</code> est <em>aussi</em> un module — intégré, indésinstallable, mais enregistré via le même contrat de manifeste. Aucun chemin spécial pour les « fonctions du socle ». Mêmes rendus, même contribution à la navigation, mêmes outils d'IA. Les modules métiers ne font qu'étendre ce que le socle fait déjà.</p>
+  </div>
+</section>
+
+<!-- 13. EXAMPLE -->
+<section id="example">
+  <span class="section-num" lang="en">13 · Worked example</span>
+  <span class="section-num" lang="fr">13 · Exemple complet</span>
+  <h2 lang="en">VAT Return — End to End</h2>
+  <h2 lang="fr">Déclaration de TVA — de bout en bout</h2>
+  <p lang="en">One example that touches every part of the architecture: a Mauritian VAT return.</p>
+  <p lang="fr">Un exemple qui touche à chaque pièce de l'architecture : une déclaration de TVA mauricienne.</p>
+
+  <div class="example" lang="en">
+    <h4>Trigger</h4>
+    <p>Q1 (Jan–Mar) closes. The accounting module's <code>calendarContributors</code> already created a "Q1 VAT due 30 Apr" event on every relevant customer's calendar. Three days before the deadline, the Control Tower posts a card to the workspace's <code>#deadlines</code> channel: "5 customers' Q1 VAT returns are due in 72 hours. 2 have all prereqs met."</p>
+
+    <h4>Create</h4>
+    <p>An accountant opens ABC Trading and clicks "New VAT return." The prereq engine runs: <strong>all expense cats approved for the period</strong> → check. <strong>Sales recorded for the period</strong> → check. Task created in <span class="pill pill--draft">draft</span>.</p>
+
+    <h4>AI prep</h4>
+    <p>Control Tower auto-runs: aggregates ledger entries by VAT box, drafts the form values, runs anomaly checks ("input tax 31% above Q4 — driven by office equipment purchases in February"), prepares a plain-English summary for the client. All visible to the accountant in the task's review view.</p>
+
+    <h4>Review</h4>
+    <p>Status moves to <span class="pill pill--review">draft</span> with AI proposals attached. The accountant reviews each box. The AI's reasoning is available on hover for any field it categorized. The accountant overrides one classification — the system records the override so future classifications learn.</p>
+
+    <h4>Firm approval</h4>
+    <p>Accountant clicks "Approve as firm." Status → <span class="pill pill--approved">firm_approved</span>. Side effects fire:</p>
+    <ul>
+      <li><strong>Substrate:</strong> <code>vat_returns</code> row updated with totals; ledger entries tagged with this return's ID.</li>
+      <li><strong>Artifacts auto-generated:</strong> MRA-format PDF, computation worksheet PDF, input-VAT ledger CSV, output-VAT ledger CSV. All land in the customer's <code>documents</code>.</li>
+      <li><strong>Card → internal thread:</strong> "Q1 2026 VAT ready: payable MUR 47,200. Awaiting filing." with action: <em>Mark as filed</em>.</li>
+      <li><strong>Approval snapshot</strong> recorded so a future reopen can be undone.</li>
+    </ul>
+
+    <h4>Filing</h4>
+    <p>Accountant files with MRA outside Cockpit, gets a reference number, comes back and clicks "Mark as filed" with the reference. Status → <span class="pill pill--filed">filed</span>. Now:</p>
+    <ul>
+      <li><strong>Substrate locked:</strong> the guardrails kick in — VAT-bearing fields on ledger entries in this period are locked from edits.</li>
+      <li><strong>Card → client thread:</strong> "Your Q1 2026 VAT has been filed. Payable: MUR 47,200 to MRA by 30 Apr. [View return →]" with the PDF attached, audience = <code>client</code>.</li>
+      <li><strong>Calendar:</strong> payment due event created.</li>
+      <li><strong>Reopen is now blocked.</strong> Mistakes go through an amendment task.</li>
+    </ul>
+
+    <h4>Mistake discovered</h4>
+    <p>A late receipt surfaces in May. Accountant creates a new task: <code>accounting.vat_amendment</code> with <code>amendsTaskId</code> = Q1 return. New task goes through its own lifecycle. On filing, posts a card to both audiences: "We filed an amendment to your Q1 VAT — original MUR 47,200, revised MUR 49,800. Reason: late receipt for office supplies." Original return stays exactly as filed.</p>
+  </div>
+
+  <div class="example" lang="fr">
+    <h4>Déclencheur</h4>
+    <p>Le T1 (janv.–mars) se clôt. Les <code>calendarContributors</code> du module comptabilité ont déjà créé un événement « TVA T1 due le 30 avril » sur le calendrier de chaque client concerné. Trois jours avant l'échéance, Tour de Contrôle publie une carte dans le canal <code>#deadlines</code> de l'espace : « Les déclarations de TVA T1 de 5 clients sont dues dans 72 heures. 2 ont tous leurs prérequis satisfaits. »</p>
+
+    <h4>Création</h4>
+    <p>Un comptable ouvre ABC Trading et clique « Nouvelle déclaration de TVA ». Le moteur de prérequis tourne : <strong>toutes les catégorisations de dépenses de la période sont approuvées</strong> → ✓. <strong>Les ventes de la période sont enregistrées</strong> → ✓. Tâche créée en <span class="pill pill--draft">brouillon</span>.</p>
+
+    <h4>Préparation IA</h4>
+    <p>Tour de Contrôle s'exécute automatiquement : agrège les écritures par case TVA, esquisse les valeurs du formulaire, lance des contrôles d'anomalies (« la TVA déductible est 31 % au-dessus du T4 — tiré par des achats d'équipement de bureau en février »), prépare un résumé en français clair pour le client. Tout est visible pour le comptable dans la vue de revue de la tâche.</p>
+
+    <h4>Revue</h4>
+    <p>Le statut passe à <span class="pill pill--review">brouillon</span> avec les propositions de l'IA jointes. Le comptable revoit chaque case. Le raisonnement de l'IA est disponible au survol pour tout champ qu'elle a classé. Le comptable corrige une classification — le système enregistre la correction pour que les futures classifications apprennent.</p>
+
+    <h4>Validation par le cabinet</h4>
+    <p>Le comptable clique « Valider en tant que cabinet ». Statut → <span class="pill pill--approved">validée cabinet</span>. Les effets de bord se déclenchent :</p>
+    <ul>
+      <li><strong>Substrat :</strong> la ligne <code>vat_returns</code> est mise à jour avec les totaux ; les écritures comptables sont marquées avec l'ID de cette déclaration.</li>
+      <li><strong>Artefacts générés automatiquement :</strong> PDF au format MRA, feuille de calcul, grand livre de TVA déductible CSV, grand livre de TVA collectée CSV. Tout atterrit dans les <code>documents</code> du client.</li>
+      <li><strong>Carte → fil interne :</strong> « TVA T1 2026 prête : MUR 47 200 à payer. En attente de dépôt. » avec l'action <em>Marquer comme déposée</em>.</li>
+      <li><strong>Instantané d'approbation</strong> enregistré pour qu'une réouverture future puisse être annulée.</li>
+    </ul>
+
+    <h4>Dépôt</h4>
+    <p>Le comptable dépose à la MRA en dehors de Cockpit, obtient un numéro de référence, revient et clique « Marquer comme déposée » avec la référence. Statut → <span class="pill pill--filed">déposée</span>. Maintenant :</p>
+    <ul>
+      <li><strong>Substrat verrouillé :</strong> les garde-fous se déclenchent — les champs porteurs de TVA des écritures comptables de cette période sont verrouillés contre toute modification.</li>
+      <li><strong>Carte → fil client :</strong> « Votre TVA T1 2026 a été déposée. À payer : MUR 47 200 à la MRA avant le 30 avril. [Voir la déclaration →] » avec le PDF en pièce jointe, audience = <code>client</code>.</li>
+      <li><strong>Calendrier :</strong> un événement d'échéance de paiement est créé.</li>
+      <li><strong>La réouverture est désormais bloquée.</strong> Les erreurs passent par une tâche d'amendement.</li>
+    </ul>
+
+    <h4>Erreur découverte</h4>
+    <p>Un reçu en retard refait surface en mai. Le comptable crée une nouvelle tâche : <code>accounting.vat_amendment</code> avec <code>amendsTaskId</code> = déclaration T1. La nouvelle tâche suit son propre cycle de vie. Au dépôt, elle publie une carte dans les deux audiences : « Nous avons déposé un amendement à votre TVA T1 — initial MUR 47 200, révisé MUR 49 800. Motif : reçu tardif pour fournitures de bureau. » La déclaration originale reste exactement telle qu'elle a été déposée.</p>
+  </div>
+
+  <p lang="en">This walks through: <strong>substrate</strong>, <strong>artifacts</strong>, <strong>cards</strong>, <strong>prereqs</strong>, <strong>multi-stage approval</strong>, <strong>guardrails</strong>, <strong>amendments</strong>, <strong>Control Tower assistance</strong>, <strong>client-portal visibility</strong>, <strong>module-contributed calendar events</strong>. All from the architecture above, with no module-specific magic.</p>
+  <p lang="fr">Cela traverse : <strong>substrat</strong>, <strong>artefacts</strong>, <strong>cartes</strong>, <strong>prérequis</strong>, <strong>approbation multi-étapes</strong>, <strong>garde-fous</strong>, <strong>amendements</strong>, <strong>aide de la Tour de Contrôle</strong>, <strong>visibilité dans le portail client</strong>, <strong>événements de calendrier apportés par un module</strong>. Tout sort de l'architecture ci-dessus, sans magie spécifique au module.</p>
+</section>
+
+<!-- 14. ROADMAP -->
+<section id="roadmap">
+  <span class="section-num" lang="en">14 · Roadmap</span>
+  <span class="section-num" lang="fr">14 · Feuille de route</span>
+  <h2 lang="en">Build Roadmap</h2>
+  <h2 lang="fr">Feuille de route de construction</h2>
+  <p lang="en">Five phases. Hard rule: no industry module ships until the core stands alone.</p>
+  <p lang="fr">Cinq phases. Règle dure : aucun module métier ne sort tant que le socle ne tient pas tout seul.</p>
+
+  <table lang="en">
+    <thead><tr><th>Phase</th><th>What ships</th><th>Validates</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Phase 0</strong><br>Scaffold</td><td>Next.js 16 + Convex + Clerk + Tailwind v4 + shadcn project. Clerk Organizations enabled. Empty <code>(app)</code> and <code>(portal)</code> shells. Module registry skeleton with zero real modules. <code>getActor</code> works.</td><td>The infrastructure runs locally; both shells render; auth resolves.</td></tr>
+      <tr><td><strong>Phase 1</strong><br>Core platform</td><td>Workspaces + invites, customers CRUD, documents (storage + visibility), tasks (envelope + four core task types), threads (internal + team chat), inbox, calendar, audit log, prereq engine, Control Tower (basic). Connectors framework with T1 ported from v3.</td><td>An agency can use Cockpit productively with no industry module installed.</td></tr>
+      <tr><td><strong>Phase 2</strong><br>Accounting module</td><td>Bank rec, expense categorization, VAT, chart of accounts ported into <code>modules/accounting/</code> through the manifest contract.</td><td>The module system handles complex, real-world workflows. Anything painful here → redesign the contract.</td></tr>
+      <tr><td><strong>Phase 3</strong><br>Client portal</td><td><code>(portal)</code> shell wired up. Document upload from portal. Client thread. Module-contributed portal routes (e.g. notary signing flow).</td><td>Audience / visibility design from Phase 1 pays off — portal should "just work."</td></tr>
+      <tr><td><strong>Phase 4</strong><br>Notary module</td><td>Signature requests, deed templates, deadline tracking. Cross-audience (firm + client) workflow.</td><td>The module system isn't just accounting-shaped — it's genuinely flexible.</td></tr>
+    </tbody>
+  </table>
+  <table lang="fr">
+    <thead><tr><th>Phase</th><th>Ce qui sort</th><th>Ce qu'on valide</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Phase 0</strong><br>Échafaudage</td><td>Projet Next.js 16 + Convex + Clerk + Tailwind v4 + shadcn. Clerk Organizations activé. Coques <code>(app)</code> et <code>(portal)</code> vides. Squelette de registre de modules sans modules réels. <code>getActor</code> fonctionne.</td><td>L'infrastructure tourne en local ; les deux coques se rendent ; l'auth résout.</td></tr>
+      <tr><td><strong>Phase 1</strong><br>Plateforme socle</td><td>Espaces + invitations, CRUD clients, documents (stockage + visibilité), tâches (enveloppe + quatre types socles), fils (interne + messagerie équipe), boîte de réception, calendrier, journal d'audit, moteur de prérequis, Tour de Contrôle (base). Cadre de connecteurs avec T1 porté de v3.</td><td>Une agence peut utiliser Cockpit de façon productive sans aucun module métier installé.</td></tr>
+      <tr><td><strong>Phase 2</strong><br>Module Expertise comptable</td><td>Rapprochement bancaire, catégorisation des dépenses, TVA, plan comptable portés dans <code>modules/accounting/</code> via le contrat de manifeste.</td><td>Le système de modules tient face à des flux réels et complexes. Tout point douloureux ici → on redessine le contrat.</td></tr>
+      <tr><td><strong>Phase 3</strong><br>Portail client</td><td>Coque <code>(portal)</code> câblée. Téléversement de documents depuis le portail. Fil client. Routes du portail apportées par les modules (par ex. flux de signature du notariat).</td><td>Le design audience / visibilité de la phase 1 paie — le portail doit « simplement marcher ».</td></tr>
+      <tr><td><strong>Phase 4</strong><br>Module Notariat</td><td>Demandes de signature, modèles d'actes, suivi des échéances. Flux multi-audiences (cabinet + client).</td><td>Le système de modules n'est pas qu'« en forme de comptabilité » — il est réellement flexible.</td></tr>
+    </tbody>
+  </table>
+
+  <p lang="en">Phases 1 and 2 are long. Phases 0, 3, 4 are each a focused sprint.</p>
+  <p lang="fr">Les phases 1 et 2 sont longues. Les phases 0, 3 et 4 sont chacune un sprint focalisé.</p>
+</section>
+
+<!-- 15. SCHEMA -->
+<section id="schema">
+  <span class="section-num" lang="en">15 · Appendix</span>
+  <span class="section-num" lang="fr">15 · Annexe</span>
+  <h2 lang="en">Schema Sketch</h2>
+  <h2 lang="fr">Esquisse du schéma</h2>
+  <p lang="en">Convex tables, indicative shapes. Field lists are illustrative, not exhaustive.</p>
+  <p lang="fr">Tables Convex, formes indicatives. Les listes de champs sont illustratives, non exhaustives.</p>
+
+  <h3 lang="en">Tenancy &amp; people</h3>
+  <h3 lang="fr">Multi-tenant &amp; personnes</h3>
+  <pre><code>workspaces       { _id, name, clerkOrgId, installedModules: string[], industryTags?: string[] }
+memberships      { _id, workspaceId, userId, role, scope: <span class="s">"all"</span>|<span class="s">"assigned_only"</span> }
+team_invites     { _id, workspaceId, email, role, scope, initialCustomerIds, status }
+users            { _id, clerkId?, kind: <span class="s">"human"</span>|<span class="s">"ai"</span>, displayName, avatarUrl?, agent? }</code></pre>
+
+  <h3 lang="en">Customers &amp; access</h3>
+  <h3 lang="fr">Clients &amp; accès</h3>
+  <pre><code>customers              { _id, workspaceId, name, ..., enabledModules?: string[] }
+customer_assignments   { _id, customerId, userId, role: <span class="s">"lead"</span>|<span class="s">"support"</span> }
+customer_access        { _id, customerId, userId, role: <span class="s">"client_owner"</span>|<span class="s">"client_viewer"</span> }</code></pre>
+
+  <h3 lang="en">Documents &amp; tasks</h3>
+  <h3 lang="fr">Documents &amp; tâches</h3>
+  <pre><code>documents       { _id, workspaceId, customerId, storageId, source, visibility: <span class="s">"firm"</span>|<span class="s">"shared"</span>,
+                  taskId?, threadMessageId?, contentType, tags, classifications }
+tasks           { _id, workspaceId, customerId, moduleId, type, status,
+                  assignedTo?, clientVisible: bool, payload: any, blockedBy: Id[],
+                  prerequisitesSnapshot: [...], dueDate?, amendsTaskId?, amendedByTaskId? }
+task_approvals  { _id, taskId, approvedBy, approvedAt, sideEffects: [...], reversedAt? }</code></pre>
+
+  <h3 lang="en">Communication</h3>
+  <h3 lang="fr">Communication</h3>
+  <pre><code>threads         { _id, workspaceId, scope: <span class="s">"customer"</span>|<span class="s">"team"</span>,
+                  customerId?, audience?: <span class="s">"firm"</span>|<span class="s">"client"</span>,
+                  kind?: <span class="s">"dm"</span>|<span class="s">"channel"</span>, channelName?, isPrivate? }
+thread_members  { _id, threadId, userId, role, lastReadAt?, notifications }
+messages        { _id, threadId, authorId, kind: <span class="s">"text"</span>|<span class="s">"card"</span>|<span class="s">"system"</span>,
+                  text?, cardType?, cardPayload?, attachments: Id[], mentions: Id[] }</code></pre>
+
+  <h3 lang="en">Calendar &amp; workflow</h3>
+  <h3 lang="fr">Calendrier &amp; flux</h3>
+  <pre><code>calendar_events { _id, workspaceId, title, start, end?, allDay,
+                  customerId?, taskId?, assignedTo: Id[], category, source, moduleId? }
+events          { _id, workspaceId, customerId?, type, payload, ts }
+inbox_items     { _id, userId, kind, ref, ts, readAt? }
+audit_log       { _id, workspaceId, actorId, onBehalfOf?, subject, action, before?, after?, reason?, ts }</code></pre>
+
+  <h3 lang="en">Modules &amp; integrations</h3>
+  <h3 lang="fr">Modules &amp; intégrations</h3>
+  <pre><code>module_settings { _id, workspaceId, moduleId, settings: object }
+connectors      { _id, workspaceId, customerId, provider, status, ciphertext }
+control_tower_sessions { _id, userId, threadId, context: { customerId?, period?, taskId?, documentIds? } }</code></pre>
+
+  <h3 lang="en">Module substrates (examples)</h3>
+  <h3 lang="fr">Substrats de modules (exemples)</h3>
+  <pre lang="en"><code><span class="c">// accounting module</span>
+accounts                { _id, customerId, code, name, parentId?, type, vatDefault?, archived }
+account_mappings        { _id, customerId, source, sourceKey, accountId }
+bank_accounts           { _id, customerId, name, accountId, currency, openingBalance }
+bank_statement_lines    { _id, bankAccountId, date, description, amount, source }
+ledger_entries          { _id, customerId, date, accountId, debit?, credit?, memo,
+                          supportingDocId?, periodId, vat?: { rate, amount, box, return_id? } }
+reconciliations         { _id, customerId, bankAccountId, period, status, totals, closingBalance }
+reconciliation_matches  { _id, reconciliationId, bankLineId, ledgerEntryId, confidence }
+vat_returns             { _id, customerId, period, status, totals,
+                          firmApprovedAt?, filedAt?, mraReference?, amendsReturnId?, amendedByReturnId? }
+
+<span class="c">// notary module</span>
+signature_requests      { _id, customerId, documentId, signers: [...], status, dueDate?,
+                          providerRef?, completedAt? }
+deed_templates          { _id, workspaceId, name, content, fields: [...] }
+notarizations           { _id, customerId, deedId, executedAt, witnesses: [...], registryRef? }</code></pre>
+  <pre lang="fr"><code><span class="c">// module expertise comptable</span>
+accounts                { _id, customerId, code, name, parentId?, type, vatDefault?, archived }
+account_mappings        { _id, customerId, source, sourceKey, accountId }
+bank_accounts           { _id, customerId, name, accountId, currency, openingBalance }
+bank_statement_lines    { _id, bankAccountId, date, description, amount, source }
+ledger_entries          { _id, customerId, date, accountId, debit?, credit?, memo,
+                          supportingDocId?, periodId, vat?: { rate, amount, box, return_id? } }
+reconciliations         { _id, customerId, bankAccountId, period, status, totals, closingBalance }
+reconciliation_matches  { _id, reconciliationId, bankLineId, ledgerEntryId, confidence }
+vat_returns             { _id, customerId, period, status, totals,
+                          firmApprovedAt?, filedAt?, mraReference?, amendsReturnId?, amendedByReturnId? }
+
+<span class="c">// module notariat</span>
+signature_requests      { _id, customerId, documentId, signers: [...], status, dueDate?,
+                          providerRef?, completedAt? }
+deed_templates          { _id, workspaceId, name, content, fields: [...] }
+notarizations           { _id, customerId, deedId, executedAt, witnesses: [...], registryRef? }</code></pre>
+</section>
+
+<footer>
+  <div lang="en">Cockpit v4 · Architecture Brief · facture.mu · 21 May 2026</div>
+  <div lang="fr">Cockpit v4 · Note d'architecture · facture.mu · 21 mai 2026</div>
+  <div lang="en">Draft for internal review</div>
+  <div lang="fr">Brouillon pour relecture interne</div>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  const STORAGE_KEY = 'cockpit-doc-lang';
+  const titles = {
+    en: 'Cockpit v4 — Architecture Brief',
+    fr: "Cockpit v4 — Note d'architecture",
+  };
+
+  function setLang(lang) {
+    if (lang !== 'en' && lang !== 'fr') lang = 'en';
+    document.documentElement.setAttribute('data-lang', lang);
+    document.documentElement.setAttribute('lang', lang);
+    document.title = titles[lang];
+    try { localStorage.setItem(STORAGE_KEY, lang); } catch (e) {}
+    document.querySelectorAll('.lang-btn').forEach(function (btn) {
+      btn.classList.toggle('active', btn.dataset.lang === lang);
+      btn.setAttribute('aria-pressed', btn.dataset.lang === lang ? 'true' : 'false');
+    });
+  }
+
+  let saved = 'en';
+  try { saved = localStorage.getItem(STORAGE_KEY) || 'en'; } catch (e) {}
+  setLang(saved);
+
+  document.querySelectorAll('.lang-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () { setLang(btn.dataset.lang); });
+  });
+})();
+</script>
+
+</body>
+</html>

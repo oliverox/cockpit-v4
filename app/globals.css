@@ -1,26 +1,179 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-sans-raw), "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: var(--font-mono-raw), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: var(--font-sans-raw), "Helvetica Neue", Helvetica, Arial, sans-serif;
+
+  /* shadcn-shaped semantic colors (so primitives we add later just work) */
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* sidebar tokens */
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* facture.mu brand palette (utility-accessible) */
+  --color-fmu-navy: var(--fmu-navy);
+  --color-fmu-navy-2: var(--fmu-navy-2);
+  --color-fmu-green: var(--fmu-green);
+  --color-fmu-green-2: var(--fmu-green-2);
+  --color-fmu-yellow: var(--fmu-yellow);
+  --color-fmu-red: var(--fmu-red);
+
+  /* surfaces & ink (utility-accessible) */
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-card-tint: var(--card-tint);
+  --color-bg-2: var(--bg-2);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+:root {
+  --radius: 0.625rem;
+
+  /* facture.mu brand palette */
+  --fmu-navy: #092448;
+  --fmu-navy-2: #122e57;
+  --fmu-green: #1c764d;
+  --fmu-green-2: #239961;
+  --fmu-yellow: #ffbb00;
+  --fmu-red: #df0a28;
+
+  /* surfaces */
+  --background: #f6f5f1;       /* page (warm cream) */
+  --bg-2: #efede7;             /* secondary surface */
+  --card: #ffffff;
+  --card-tint: #fbfaf6;
+  --line: #e7e3d8;
+  --line-2: #d8d3c4;
+
+  /* ink */
+  --foreground: #0c1a30;
+  --ink: #0c1a30;
+  --ink-2: #41506a;
+  --ink-3: #7d8699;
+  --ink-4: #a9afbb;
+
+  /* semantic mappings — primary = navy */
+  --card-foreground: var(--ink);
+  --popover: #ffffff;
+  --popover-foreground: var(--ink);
+  --primary: var(--fmu-navy);
+  --primary-foreground: #ffffff;
+  --secondary: var(--bg-2);
+  --secondary-foreground: var(--ink);
+  --muted: var(--bg-2);
+  --muted-foreground: var(--ink-3);
+  --accent: var(--bg-2);
+  --accent-foreground: var(--ink);
+  --destructive: var(--fmu-red);
+  --border: var(--line);
+  --input: var(--line-2);
+  --ring: var(--fmu-navy);
+
+  /* status-pill bg/fg pairs */
+  --pill-review-bg: #fde7c8;     --pill-review-fg: #8a4a09;
+  --pill-uploading-bg: #ffe9a8;  --pill-uploading-fg: #6d4d00;
+  --pill-processing-bg: #d9e3ff; --pill-processing-fg: #213b87;
+  --pill-completed-bg: #c9ecd5;  --pill-completed-fg: #1c5a36;
+  --pill-blocked-bg: #fce8e9;    --pill-blocked-fg: #87212e;
+  --pill-filed-bg: #d9e3ff;      --pill-filed-fg: #213b87;
+  --pill-balanced-fg: var(--fmu-green);
+
+  /* primary (left) sidebar — navy */
+  --sidebar: var(--fmu-navy);
+  --sidebar-foreground: #cdd5e2;
+  --sidebar-primary: var(--fmu-yellow);
+  --sidebar-primary-foreground: var(--fmu-navy);
+  --sidebar-accent: rgba(255, 255, 255, 0.06);
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: var(--fmu-yellow);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+  button,
+  [role="button"],
+  a,
+  summary,
+  [onclick] {
+    cursor: pointer;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Status pill — used across modules, tasks, sync logs */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
 }
+.pill--review     { background: var(--pill-review-bg);     color: var(--pill-review-fg); }
+.pill--uploading  { background: var(--pill-uploading-bg);  color: var(--pill-uploading-fg); }
+.pill--processing { background: var(--pill-processing-bg); color: var(--pill-processing-fg); }
+.pill--completed  { background: var(--pill-completed-bg);  color: var(--pill-completed-fg); }
+.pill--blocked    { background: var(--pill-blocked-bg);    color: var(--pill-blocked-fg); }
+.pill--filed      { background: var(--pill-filed-bg);      color: var(--pill-filed-fg); }
+.pill--balanced   { background: transparent; color: var(--pill-balanced-fg); padding: 0; font-weight: 600; }
+.pill--neutral    { background: var(--bg-2); color: var(--ink-2); }
+.pill--draft      { background: var(--bg-2); color: var(--ink-2); }
+.pill--failed     { background: rgba(223, 10, 40, 0.10); color: var(--fmu-red); }
+
+/* Eyebrow / mono small-caps label */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+/* Numeric — tabular figures */
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }

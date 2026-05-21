@@ -1,36 +1,49 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Cockpit v4
 
-## Getting Started
+A multi-industry operations platform — CRM, documents, tasks, chat, calendar,
+and AI ("Control Tower") — for accountants, notaries, agencies, and beyond.
 
-First, run the development server:
+Successor to cockpit-v3; not a fork.
+
+## Quick start
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
+pnpm dev:convex   # first time only — interactive Convex setup
+pnpm dev          # then run both servers concurrently (next on :3011, convex)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+You'll also need:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- A Clerk application with Organizations enabled. Set
+  `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` in `.env.local`.
+- A JWT template named `convex` in Clerk dashboard → JWT Templates.
+- The issuer domain set in both `.env.local`
+  (`CLERK_JWT_ISSUER_DOMAIN=https://<your-instance>.clerk.accounts.dev`)
+  and on the Convex deployment (`pnpm exec convex env set CLERK_JWT_ISSUER_DOMAIN "..."`).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Docs
 
-## Learn More
+- **Architecture brief** (the source of truth): `docs/architecture.html` —
+  open in a browser, toggle EN/FR top right.
+- **Repo guide for Claude / agents**: `CLAUDE.md`.
 
-To learn more about Next.js, take a look at the following resources:
+## Tech stack
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Next.js 16 (App Router, Turbopack) · React 19 · Tailwind v4 · shadcn ·
+Convex · Clerk · lucide-react · pnpm 11.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Scripts
 
-## Deploy on Vercel
+| Command | What it does |
+|---|---|
+| `pnpm dev` | Run next + convex concurrently (port 3011) |
+| `pnpm dev:next` | Next.js only |
+| `pnpm dev:convex` | Convex only |
+| `pnpm build` | Production build |
+| `pnpm typecheck` | `tsc --noEmit` |
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Status
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Phase 0 scaffold. See `CLAUDE.md` § Phase 0 status for what's wired and
+`docs/architecture.html` § Roadmap for what's next.
