@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useRouter, usePathname, useParams } from "next/navigation";
 import { useConvexAuth, useQuery } from "convex/react";
 import { AppShell } from "@/components/layout/app-shell";
+import { SuperadminBanner } from "@/components/layout/superadmin-banner";
 import type { Crumb } from "@/components/layout/top-bar";
 import { useEnsureUser } from "@/hooks/use-ensure-user";
 import { api } from "@/convex/_generated/api";
@@ -38,10 +39,33 @@ export default function AppGroupLayout({
     }
   }, [isLoading, isAuthenticated, router]);
 
+  // Route users to the right surface based on their onboarding state.
+  const onboardingState = useQuery(
+    api.workspaces.onboardingState,
+    isLoading || !isAuthenticated ? "skip" : {},
+  );
+
+  useEffect(() => {
+    if (!onboardingState) return;
+    if (onboardingState.state === "needs_workspace") {
+      router.replace("/onboarding/create-workspace");
+    } else if (onboardingState.state === "client_only") {
+      router.replace("/portal");
+    }
+    // "superadmin_no_session" stays here for now — the superadmin banner
+    // (next step) provides the workspace picker inline.
+    // "has_workspace" — they belong; nothing to do.
+  }, [onboardingState, router]);
+
   // Look up the customer name (if any) for breadcrumb purposes.
   const customer = useQuery(
     api.customers.get,
     params?.id ? { customerId: params.id as Id<"customers"> } : "skip",
+  );
+
+  const crumbs = useMemo(
+    () => buildCrumbs(pathname, customer ?? undefined),
+    [pathname, customer],
   );
 
   if (isLoading) {
@@ -56,9 +80,28 @@ export default function AppGroupLayout({
     return null; // useEffect will redirect
   }
 
-  const crumbs = buildCrumbs(pathname, customer ?? undefined);
+  // While we're deciding where to send the user (no workspace, client-only),
+  // show a neutral loading frame to avoid flashing the shell.
+  if (
+    onboardingState &&
+    (onboardingState.state === "needs_workspace" ||
+      onboardingState.state === "client_only")
+  ) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background text-sm text-ink-3">
+        Loading…
+      </div>
+    );
+  }
 
-  return <AppShell crumbs={crumbs}>{children}</AppShell>;
+  return (
+    <div className="flex h-screen flex-col">
+      <SuperadminBanner />
+      <div className="min-h-0 flex-1">
+        <AppShell crumbs={crumbs}>{children}</AppShell>
+      </div>
+    </div>
+  );
 }
 
 function buildCrumbs(
@@ -99,6 +142,10 @@ function buildCrumbs(
       break;
     case "debug":
       crumbs.push({ label: "Debug" });
+      break;
+    case "admin":
+      crumbs.push({ label: "Admin" });
+      if (segments[1]) crumbs.push({ label: titleCase(segments[1]) });
       break;
     default:
       crumbs.push({ label: titleCase(segments[0]) });

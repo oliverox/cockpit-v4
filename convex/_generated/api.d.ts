@@ -10,6 +10,7 @@
 
 import type * as customers from "../customers.js";
 import type * as lib_auth from "../lib/auth.js";
+import type * as superadmin from "../superadmin.js";
 import type * as users from "../users.js";
 import type * as workspaces from "../workspaces.js";
 
@@ -22,6 +23,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   customers: typeof customers;
   "lib/auth": typeof lib_auth;
+  superadmin: typeof superadmin;
   users: typeof users;
   workspaces: typeof workspaces;
 }>;

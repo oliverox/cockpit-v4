@@ -22,6 +22,8 @@ export const ensureUser = mutation({
     const displayName =
       identity.name ?? identity.givenName ?? identity.email ?? "User";
 
+    let userId;
+
     if (existing) {
       // Refresh profile fields if Clerk has newer values
       const patch: Record<string, unknown> = {};
@@ -40,16 +42,45 @@ export const ensureUser = mutation({
       if (Object.keys(patch).length > 0) {
         await ctx.db.patch(existing._id, patch);
       }
-      return existing._id;
+      userId = existing._id;
+    } else {
+      userId = await ctx.db.insert("users", {
+        kind: "human",
+        clerkId: identity.subject,
+        email: identity.email ?? undefined,
+        displayName,
+        avatarUrl: identity.pictureUrl ?? undefined,
+      });
     }
 
-    return await ctx.db.insert("users", {
-      kind: "human",
-      clerkId: identity.subject,
-      email: identity.email ?? undefined,
-      displayName,
-      avatarUrl: identity.pictureUrl ?? undefined,
-    });
+    // Auto-promote founders to superadmin based on the SUPERADMIN_EMAILS
+    // env var on the Convex deployment (comma-separated). Idempotent.
+    const superadminEmailsRaw = process.env.SUPERADMIN_EMAILS ?? "";
+    const superadminEmails = superadminEmailsRaw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (
+      identity.email &&
+      superadminEmails.includes(identity.email.toLowerCase())
+    ) {
+      const existingSA = await ctx.db
+        .query("superadmins")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .first();
+      if (!existingSA) {
+        await ctx.db.insert("superadmins", {
+          userId,
+          reason: "founder (auto-provisioned from SUPERADMIN_EMAILS)",
+        });
+      } else if (existingSA.archived) {
+        // Reactivate if previously archived
+        await ctx.db.patch(existingSA._id, { archived: false });
+      }
+    }
+
+    return userId;
   },
 });
 
