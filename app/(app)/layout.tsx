@@ -122,7 +122,17 @@ function buildCrumbs(
           href: `/customers/${segments[1]}`,
         });
         if (segments[2]) {
-          crumbs.push({ label: titleCase(segments[2]) });
+          // If we have a sub-page (e.g. /tasks/[taskId]), make the
+          // section name itself a link too.
+          if (segments[3]) {
+            crumbs.push({
+              label: titleCase(segments[2]),
+              href: `/customers/${segments[1]}/${segments[2]}`,
+            });
+            crumbs.push({ label: titleCase(segments[2]).replace(/s$/, "") });
+          } else {
+            crumbs.push({ label: titleCase(segments[2]) });
+          }
         }
       }
       break;
