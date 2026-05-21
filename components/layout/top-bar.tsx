@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
+import { useQuery } from "convex/react";
 import { UserMenu } from "./user-menu";
 import { Fragment } from "react";
+import { api } from "@/convex/_generated/api";
 
 export type Crumb = {
   label: string;
@@ -15,15 +17,17 @@ type TopBarProps = {
 };
 
 export function TopBar({ crumbs }: TopBarProps) {
+  const workspace = useQuery(api.workspaces.getActive);
+
   return (
     <header className="flex h-14 items-center gap-4 border-b border-line bg-card px-6">
-      {/* Brand wordmark */}
+      {/* Workspace name (falls back to "Cockpit" while loading or pre-onboarding) */}
       <Link
         href="/customers"
         className="text-sm font-semibold tracking-tight text-fmu-navy"
         prefetch={false}
       >
-        Cockpit
+        {workspace?.name ?? "Cockpit"}
       </Link>
 
       <span className="text-ink-4">/</span>

@@ -6,6 +6,7 @@
   --font-sans: var(--font-sans-raw), "Helvetica Neue", Helvetica, Arial, sans-serif;
   --font-mono: var(--font-mono-raw), ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-display: var(--font-sans-raw), "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-serif: var(--font-serif-raw), "Iowan Old Style", Georgia, "Times New Roman", serif;
 
   /* shadcn-shaped semantic colors (so primitives we add later just work) */
   --color-card: var(--card);
@@ -177,3 +178,16 @@
 
 /* Numeric — tabular figures */
 .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+/* Ledger-paper background pattern — faint horizontal rules.
+   Evokes accounting-paper / Mauritian receipt books. Use sparingly,
+   typically as an atmospheric layer on onboarding & marketing surfaces. */
+.ledger-bg {
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 31px,
+    rgba(9, 36, 72, 0.035) 31px,
+    rgba(9, 36, 72, 0.035) 32px
+  );
+}

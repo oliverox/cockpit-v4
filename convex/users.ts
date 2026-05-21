@@ -105,10 +105,16 @@ export const whoAmI = query({
                 role: actor.role,
                 scope: actor.scope,
               })
-            : ({
-                kind: "client" as const,
-                customerCount: actor.customerAccess.length,
-              }),
+            : actor.kind === "client"
+              ? ({
+                  kind: "client" as const,
+                  customerCount: actor.customerAccess.length,
+                })
+              : ({
+                  kind: "superadmin" as const,
+                  activeWorkspaceId: actor.activeWorkspaceId ?? null,
+                  hasSession: actor.sessionId !== undefined,
+                }),
     };
   },
 });

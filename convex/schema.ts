@@ -11,6 +11,7 @@ import { v } from "convex/values";
  *   4. Communication       — threads, members, messages
  *   5. Calendar & workflow — events, inbox, audit, event log
  *   6. Modules & integrations — settings, connectors, control tower
+ *   7. Superadmins         — cross-workspace staff access
  *
  * Module-specific substrates (e.g. accounts, ledger_entries for accounting)
  * live in convex/modules/<id>/schema.ts and are stitched in at module install.
@@ -493,6 +494,12 @@ export default defineSchema({
     actorId: v.id("users"),
     /** When AI is acting on behalf of a human */
     onBehalfOf: v.optional(v.id("users")),
+    /** When a superadmin is acting cross-workspace. Captures their reason. */
+    superadminContext: v.optional(
+      v.object({
+        reason: v.optional(v.string()),
+      }),
+    ),
     /** What was changed — flattened for indexing */
     subjectKind: v.union(
       v.literal("task"),
@@ -579,4 +586,40 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_thread", ["threadId"]),
+
+  // ===================================================================
+  // 7. Superadmins (Cockpit staff cross-workspace access)
+  // ===================================================================
+
+  /**
+   * App-level staff accounts. Independent of Clerk Organizations — a row
+   * here grants the user cross-workspace read/write capability with their
+   * own identity preserved in the audit log.
+   *
+   * Bootstrap by manual insert in the Convex dashboard.
+   */
+  superadmins: defineTable({
+    userId: v.id("users"),
+    grantedBy: v.optional(v.id("users")),
+    reason: v.optional(v.string()), // "founder", "engineering on-call", etc.
+    archived: v.optional(v.boolean()),
+  })
+    .index("by_user", ["userId"]),
+
+  /**
+   * Tracks which workspace a superadmin is currently impersonating. Cleared
+   * on sign-out (or explicit "exit superadmin mode"). One row per superadmin
+   * at any given time — older rows can be deleted or marked inactive.
+   */
+  superadmin_sessions: defineTable({
+    userId: v.id("users"),
+    activeWorkspaceId: v.id("workspaces"),
+    reason: v.optional(v.string()), // e.g. "support ticket #4321"
+    startedAt: v.number(),
+    endedAt: v.optional(v.number()),
+  })
+    // Convex auto-appends _creationTime, so `by_user` ordered desc + take(1)
+    // returns the most recent session for this user.
+    .index("by_user", ["userId"])
+    .index("by_workspace", ["activeWorkspaceId"]),
 });
