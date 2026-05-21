@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
+import { useParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import {
   Calendar as CalendarIcon,
@@ -10,12 +11,15 @@ import {
   Trash2,
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { NewEventDialog } from "@/components/calendar/new-event-dialog";
 import { cn } from "@/lib/utils";
 
-export default function CalendarPage() {
-  const items = useQuery(api.calendar.upcoming, {});
+export default function CustomerCalendarPage() {
+  const params = useParams<{ id: string }>();
+  const customerId = params.id as Id<"customers">;
+  const items = useQuery(api.calendar.upcomingForCustomer, { customerId });
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const grouped = useMemo(() => groupByDate(items ?? []), [items]);
@@ -32,7 +36,11 @@ export default function CalendarPage() {
         </Button>
       </div>
 
-      <NewEventDialog open={dialogOpen} onOpenChange={setDialogOpen} />
+      <NewEventDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        fixedCustomerId={customerId}
+      />
 
       {items === undefined && (
         <p className="text-sm text-ink-3">Loading…</p>
@@ -44,7 +52,7 @@ export default function CalendarPage() {
       {items !== undefined && items.length > 0 && (
         <div className="space-y-6">
           {grouped.map((g) => (
-            <DateGroup key={g.dateKey} group={g} />
+            <DateGroup key={g.dateKey} group={g} customerId={customerId} />
           ))}
         </div>
       )}
@@ -53,7 +61,7 @@ export default function CalendarPage() {
 }
 
 type CalendarItem = NonNullable<
-  ReturnType<typeof useQuery<typeof api.calendar.upcoming>>
+  ReturnType<typeof useQuery<typeof api.calendar.upcomingForCustomer>>
 >[number];
 
 type Group = {
@@ -88,7 +96,13 @@ function groupByDate(items: CalendarItem[]): Group[] {
     }));
 }
 
-function DateGroup({ group }: { group: Group }) {
+function DateGroup({
+  group,
+  customerId,
+}: {
+  group: Group;
+  customerId: Id<"customers">;
+}) {
   return (
     <div className={cn("space-y-2", group.isPast && "opacity-60")}>
       <div className="flex items-baseline gap-2">
@@ -103,6 +117,7 @@ function DateGroup({ group }: { group: Group }) {
             <CalendarRow
               key={`${item.kind}-${String(item.id)}`}
               item={item}
+              customerId={customerId}
             />
           ))}
         </ul>
@@ -111,19 +126,20 @@ function DateGroup({ group }: { group: Group }) {
   );
 }
 
-function CalendarRow({ item }: { item: CalendarItem }) {
+function CalendarRow({
+  item,
+  customerId,
+}: {
+  item: CalendarItem;
+  customerId: Id<"customers">;
+}) {
   const deleteEvent = useMutation(api.calendar.deleteEvent);
 
   const Icon = item.kind === "task" ? ListChecks : CalendarIcon;
   const href =
     item.kind === "task"
-      ? item.customerId
-        ? `/customers/${item.customerId}/tasks/${item.id}`
-        : "#"
-      : item.customerId
-        ? `/customers/${item.customerId}/calendar`
-        : "#";
-
+      ? `/customers/${customerId}/tasks/${item.id}`
+      : "#";
   const time =
     item.kind === "event" && !item.allDay
       ? formatTime(item.start)
@@ -140,16 +156,17 @@ function CalendarRow({ item }: { item: CalendarItem }) {
           item.kind === "task" ? "text-fmu-navy" : "text-ink-3",
         )}
       />
-      <Link
-        href={href}
-        prefetch={false}
-        className="min-w-0 flex-1 truncate text-sm font-medium text-ink hover:text-fmu-navy"
-      >
-        {item.title}
-      </Link>
-      {item.customerName && (
-        <span className="hidden text-xs text-ink-3 sm:inline">
-          {item.customerName}
+      {item.kind === "task" ? (
+        <Link
+          href={href}
+          prefetch={false}
+          className="min-w-0 flex-1 truncate text-sm font-medium text-ink hover:text-fmu-navy"
+        >
+          {item.title}
+        </Link>
+      ) : (
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink">
+          {item.title}
         </span>
       )}
       {item.kind === "event" && item.source === "manual" && (
@@ -167,8 +184,6 @@ function CalendarRow({ item }: { item: CalendarItem }) {
     </li>
   );
 }
-
-// ---- formatters --------------------------------------------------------
 
 function toDateKey(ts: number): string {
   const d = new Date(ts);

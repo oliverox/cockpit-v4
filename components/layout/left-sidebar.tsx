@@ -58,12 +58,6 @@ export function LeftSidebar() {
           active={pathname.startsWith("/inbox")}
         />
         <RailButton
-          href="/calendar"
-          icon={Calendar}
-          label="Calendar"
-          active={pathname.startsWith("/calendar")}
-        />
-        <RailButton
           href="/team"
           icon={MessagesSquare}
           label="Team chat"
@@ -99,6 +93,12 @@ export function LeftSidebar() {
               icon={MessageSquare}
               label="Chat"
               active={pathname.startsWith(`/customers/${customerId}/chat`)}
+            />
+            <RailButton
+              href={`/customers/${customerId}/calendar`}
+              icon={Calendar}
+              label="Calendar"
+              active={pathname.startsWith(`/customers/${customerId}/calendar`)}
             />
           </nav>
         </>

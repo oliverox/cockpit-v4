@@ -140,9 +140,6 @@ function buildCrumbs(
     case "inbox":
       crumbs.push({ label: "Inbox" });
       break;
-    case "calendar":
-      crumbs.push({ label: "Calendar" });
-      break;
     case "team":
       crumbs.push({ label: "Team chat" });
       break;
