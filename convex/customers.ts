@@ -3,10 +3,11 @@ import { v } from "convex/values";
 import {
   canActInWorkspace,
   canManageTeam,
+  canSeeCustomer,
   getActor,
-  isClient,
   isMember,
   isSuperadmin,
+  tryGetActor,
 } from "./lib/auth";
 import { Id } from "./_generated/dataModel";
 
@@ -201,36 +202,19 @@ export const unarchive = mutation({
 
 /**
  * Fetch a single customer the actor is allowed to see.
- * Returns null if the customer doesn't exist or the actor lacks access.
+ * Returns null on any failure (unauthenticated, not provisioned, not
+ * authorised, customer doesn't exist) so the UI can render a tasteful
+ * empty state. Uses `tryGetActor` instead of `getActor` for that reason.
  */
 export const get = query({
   args: { customerId: v.id("customers") },
   handler: async (ctx, args) => {
-    const actor = await getActor(ctx);
+    const actor = await tryGetActor(ctx);
+    if (!actor) return null;
     const customer = await ctx.db.get(args.customerId);
     if (!customer) return null;
-
-    if (isClient(actor)) {
-      const ok = actor.customerAccess.some(
-        (a) => a.customerId === args.customerId,
-      );
-      return ok ? customer : null;
-    }
-
-    if (isMember(actor)) {
-      if (customer.workspaceId !== actor.workspaceId) return null;
-      if (actor.scope === "all") return customer;
-      const assignment = await ctx.db
-        .query("customer_assignments")
-        .withIndex("by_workspace_and_user", (q) =>
-          q.eq("workspaceId", actor.workspaceId).eq("userId", actor.userId),
-        )
-        .filter((q) => q.eq(q.field("customerId"), args.customerId))
-        .first();
-      return assignment ? customer : null;
-    }
-
-    return null;
+    const allowed = await canSeeCustomer(ctx, actor, args.customerId);
+    return allowed ? customer : null;
   },
 });
 
