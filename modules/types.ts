@@ -52,6 +52,12 @@ export type TaskTypeDef = {
    * If omitted, the generic task page falls back to a JSON-payload view.
    */
   renderer?: ComponentType<TaskRendererProps>;
+  /**
+   * When true, the task page hands the entire canvas to the custom renderer
+   * — no chat-embed side panel is rendered. Use for multi-step wizards or
+   * other immersive UIs that own the full width.
+   */
+  fullWidth?: boolean;
   /** Optional default `clientVisible` for newly-created tasks of this type. */
   defaultClientVisible?: boolean;
 };

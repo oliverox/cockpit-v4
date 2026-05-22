@@ -63,9 +63,22 @@ export default function AppGroupLayout({
     params?.id ? { customerId: params.id as Id<"customers"> } : "skip",
   );
 
+  // Detect deep customer sub-routes that have a per-entity leaf to fetch
+  // (right now only /tasks/[taskId]). Add others here as routes grow.
+  const segments = pathname.split("/").filter(Boolean);
+  const taskIdSegment =
+    segments[0] === "customers" && segments[2] === "tasks" && segments[3]
+      ? (segments[3] as Id<"tasks">)
+      : null;
+  const task = useQuery(
+    api.tasks.get,
+    taskIdSegment ? { taskId: taskIdSegment } : "skip",
+  );
+
   const crumbs = useMemo(
-    () => buildCrumbs(pathname, customer ?? undefined),
-    [pathname, customer],
+    () =>
+      buildCrumbs(pathname, customer ?? undefined, task?.title ?? undefined),
+    [pathname, customer, task?.title],
   );
 
   if (isLoading) {
@@ -107,6 +120,7 @@ export default function AppGroupLayout({
 function buildCrumbs(
   pathname: string,
   customer?: { _id: Id<"customers">; name: string },
+  leafTitle?: string,
 ): Crumb[] {
   const segments = pathname.split("/").filter(Boolean);
   if (segments.length === 0) return [];
@@ -123,13 +137,15 @@ function buildCrumbs(
         });
         if (segments[2]) {
           // If we have a sub-page (e.g. /tasks/[taskId]), make the
-          // section name itself a link too.
+          // section name itself a link and use the entity's title as the leaf.
           if (segments[3]) {
             crumbs.push({
               label: titleCase(segments[2]),
               href: `/customers/${segments[1]}/${segments[2]}`,
             });
-            crumbs.push({ label: titleCase(segments[2]).replace(/s$/, "") });
+            crumbs.push({
+              label: leafTitle ?? titleCase(segments[2]).replace(/s$/, ""),
+            });
           } else {
             crumbs.push({ label: titleCase(segments[2]) });
           }
@@ -137,11 +153,11 @@ function buildCrumbs(
       }
       break;
     }
-    case "inbox":
-      crumbs.push({ label: "Inbox" });
+    case "calendar":
+      crumbs.push({ label: "Calendar" });
       break;
-    case "team":
-      crumbs.push({ label: "Team chat" });
+    case "activity":
+      crumbs.push({ label: "Client conversations" });
       break;
     case "settings":
       crumbs.push({ label: "Settings" });

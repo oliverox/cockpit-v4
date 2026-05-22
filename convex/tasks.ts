@@ -9,6 +9,7 @@ import {
   isSuperadmin,
   tryGetActor,
 } from "./lib/auth";
+import { getOrCreateClientSharedThread } from "./threads";
 
 /**
  * Tasks — the generic envelope every module's work fits into.
@@ -53,7 +54,21 @@ export const create = mutation({
     if (!(await canSeeCustomer(ctx, actor, args.customerId))) {
       throw new Error("No access to this customer");
     }
-    if (!canActInWorkspace(actor, customer.workspaceId)) {
+
+    // Authorisation by actor kind:
+    //   • Firm members / superadmins — must be in the workspace.
+    //   • Clients — limited to a whitelist of task types, and the task is
+    //     forced client-visible so the firm sees it land in the conversation.
+    const CLIENT_ALLOWED_TYPES = new Set(["core.todo"]);
+    let clientVisible = args.clientVisible ?? false;
+    if (actor.kind === "client") {
+      if (!CLIENT_ALLOWED_TYPES.has(args.type)) {
+        throw new Error(
+          "Clients can only create simple task requests for now",
+        );
+      }
+      clientVisible = true;
+    } else if (!canActInWorkspace(actor, customer.workspaceId)) {
       throw new Error("No active workspace");
     }
 
@@ -69,7 +84,7 @@ export const create = mutation({
       assignedTo: args.assignedTo,
       createdBy: actor.userId,
       dueDate: args.dueDate,
-      clientVisible: args.clientVisible ?? false,
+      clientVisible,
       payload: args.payload ?? {},
       blockedBy: [],
     });
@@ -86,6 +101,33 @@ export const create = mutation({
         ? { reason: actor.sessionReason }
         : undefined,
     });
+
+    // Auto-post a system card into the customer conversation when the task
+    // is client-visible. Firm-only tasks (e.g. internal todos) leave no
+    // trace in chat — they live on the task list / Notes only.
+    if (clientVisible) {
+      const threadId = await getOrCreateClientSharedThread(
+        ctx,
+        args.customerId,
+        customer.workspaceId,
+        actor.userId,
+      );
+      await ctx.db.insert("messages", {
+        threadId,
+        workspaceId: customer.workspaceId,
+        authorId: actor.userId,
+        kind: "card",
+        cardType: "task.created",
+        cardPayload: {
+          taskId,
+          title,
+          type: args.type,
+          dueDate: args.dueDate,
+        },
+        taskRefs: [taskId],
+      });
+      await ctx.db.patch(threadId, { lastMessageAt: Date.now() });
+    }
 
     return taskId;
   },
@@ -252,13 +294,13 @@ export const setStatus = mutation({
       );
     }
 
-    // Reopening (firm_approved → review) requires admin
+    // Reopening (firm_approved → review) requires firm owner
     if (
       task.status === "firm_approved" &&
       args.status === "review" &&
       !canManageTeam(actor)
     ) {
-      throw new Error("Only admins can reopen approved tasks");
+      throw new Error("Only the firm owner can reopen approved tasks");
     }
 
     await ctx.db.patch(args.taskId, { status: args.status });
@@ -320,6 +362,134 @@ export const archive = mutation({
     });
 
     return args.taskId;
+  },
+});
+
+// ---- Open-task panels --------------------------------------------------
+
+type OpenTaskRow = {
+  id: Id<"tasks">;
+  title: string;
+  type: string;
+  status: Doc<"tasks">["status"];
+  dueDate: number | null;
+  customerId: Id<"customers">;
+  customerName: string | null;
+  assignedTo: Id<"users"> | null;
+  createdAt: number;
+};
+
+const ACTIVE_STATUSES = new Set([
+  "draft",
+  "blocked",
+  "ingesting",
+  "processing",
+  "review",
+]);
+
+function shapeOpenRow(
+  t: Doc<"tasks">,
+  customerName: string | null,
+): OpenTaskRow {
+  return {
+    id: t._id,
+    title: t.title,
+    type: t.type,
+    status: t.status,
+    dueDate: t.dueDate ?? null,
+    customerId: t.customerId,
+    customerName,
+    assignedTo: t.assignedTo ?? null,
+    createdAt: t._creationTime,
+  };
+}
+
+function sortByDeadlinePriority(a: OpenTaskRow, b: OpenTaskRow): number {
+  // overdue first, then due-soon, then by createdAt desc for no-deadline rows
+  const aHas = a.dueDate !== null;
+  const bHas = b.dueDate !== null;
+  if (aHas && bHas) return a.dueDate! - b.dueDate!;
+  if (aHas) return -1;
+  if (bHas) return 1;
+  return b.createdAt - a.createdAt;
+}
+
+/** Open tasks for one customer, ordered overdue → due soon → undated. */
+export const listOpenByCustomer = query({
+  args: { customerId: v.id("customers") },
+  handler: async (ctx, args): Promise<OpenTaskRow[]> => {
+    const actor = await tryGetActor(ctx);
+    if (!actor) return [];
+    const customer = await ctx.db.get(args.customerId);
+    if (!customer) return [];
+    if (!(await canSeeCustomer(ctx, actor, args.customerId))) return [];
+
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_workspace_and_customer", (q) =>
+        q
+          .eq("workspaceId", customer.workspaceId)
+          .eq("customerId", args.customerId),
+      )
+      .take(500);
+
+    const open = tasks.filter((t) => ACTIVE_STATUSES.has(t.status));
+    const visible =
+      actor.kind === "client" ? open.filter((t) => t.clientVisible) : open;
+
+    return visible
+      .map((t) => shapeOpenRow(t, customer.name))
+      .sort(sortByDeadlinePriority);
+  },
+});
+
+/** All open tasks across every customer in the current workspace. */
+export const listOpenForWorkspace = query({
+  args: {},
+  handler: async (ctx): Promise<OpenTaskRow[]> => {
+    const actor = await tryGetActor(ctx);
+    if (!actor || actor.kind === "client") return [];
+    const workspaceId =
+      actor.kind === "member"
+        ? actor.workspaceId
+        : actor.kind === "superadmin"
+          ? actor.activeWorkspaceId
+          : null;
+    if (!workspaceId) return [];
+
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_workspace_and_customer", (q) =>
+        q.eq("workspaceId", workspaceId),
+      )
+      .take(1000);
+
+    const open = tasks.filter((t) => ACTIVE_STATUSES.has(t.status));
+    if (open.length === 0) return [];
+
+    // For assigned_only members, restrict to customers they're assigned to.
+    let filtered = open;
+    if (actor.kind === "member" && actor.scope === "assigned_only") {
+      const assignments = await ctx.db
+        .query("customer_assignments")
+        .withIndex("by_workspace_and_user", (q) =>
+          q.eq("workspaceId", workspaceId).eq("userId", actor.userId),
+        )
+        .take(500);
+      const assigned = new Set(assignments.map((a) => a.customerId));
+      filtered = open.filter((t) => assigned.has(t.customerId));
+    }
+
+    const customerIds = new Set(filtered.map((t) => t.customerId));
+    const customers = await Promise.all(
+      Array.from(customerIds).map((id) => ctx.db.get(id)),
+    );
+    const customerMap = new Map<Id<"customers">, string>();
+    for (const c of customers) if (c) customerMap.set(c._id, c.name);
+
+    return filtered
+      .map((t) => shapeOpenRow(t, customerMap.get(t.customerId) ?? null))
+      .sort(sortByDeadlinePriority);
   },
 });
 

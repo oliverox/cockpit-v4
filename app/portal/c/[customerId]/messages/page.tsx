@@ -20,9 +20,9 @@ import {
 } from "@/components/chat/chat-context-panel";
 import { cn } from "@/lib/utils";
 
-export default function CustomerChatPage() {
-  const params = useParams<{ id: string }>();
-  const customerId = params.id as Id<"customers">;
+export default function PortalCustomerMessagesPage() {
+  const params = useParams<{ customerId: string }>();
+  const customerId = params.customerId as Id<"customers">;
 
   const ensureThread = useMutation(api.threads.ensureCustomerSharedThread);
   const [threadId, setThreadId] = useState<Id<"threads"> | null>(null);
@@ -45,10 +45,10 @@ export default function CustomerChatPage() {
     );
   }
 
-  return <ChatSurface threadId={threadId} customerId={customerId} />;
+  return <ClientChatSurface threadId={threadId} customerId={customerId} />;
 }
 
-function ChatSurface({
+function ClientChatSurface({
   threadId,
   customerId,
 }: {
@@ -77,7 +77,7 @@ function ChatSurface({
   return (
     <div className="grid h-full gap-0 lg:grid-cols-2">
       <div className="flex h-full min-h-0 flex-col border-r border-line">
-        <ChatHeader
+        <Header
           customerId={customerId}
           taskFilter={taskFilter}
           onClearFilter={() => setTaskFilter(null)}
@@ -92,14 +92,14 @@ function ChatSurface({
             <div className="text-sm text-ink-3">
               {taskFilter
                 ? "No messages reference this task yet."
-                : "No messages yet. Start the conversation."}
+                : "No messages yet."}
             </div>
           )}
           {filtered !== undefined && filtered.length > 0 && (
             <ChatMessageList
               messages={filtered}
               customerId={customerId}
-              surface="firm"
+              surface="portal"
               onSelectTask={(taskId) => setSelection({ kind: "task", taskId })}
               onSelectDocument={(documentId, taskId) =>
                 setSelection({ kind: "document", documentId, taskId })
@@ -114,7 +114,7 @@ function ChatSurface({
         <ChatContextPanel
           selection={selection}
           customerId={customerId}
-          surface="firm"
+          surface="portal"
           onClear={() => setSelection(null)}
         />
       </div>
@@ -122,9 +122,7 @@ function ChatSurface({
   );
 }
 
-// ── Header ─────────────────────────────────────────────────────────────
-
-function ChatHeader({
+function Header({
   customerId,
   taskFilter,
   onClearFilter,
@@ -144,9 +142,9 @@ function ChatHeader({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-card px-8 py-3">
       <div>
-        <div className="eyebrow">Conversation</div>
+        <div className="eyebrow">Shared conversation</div>
         <div className="text-sm text-ink-3">
-          Shared with the customer.
+          Visible to you and your firm.
         </div>
       </div>
       <div className="flex items-center gap-2">
@@ -156,15 +154,13 @@ function ChatHeader({
               type="button"
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-md border border-line bg-card px-2.5 py-1 text-xs font-medium text-ink-2 hover:border-line-2 hover:bg-card-tint",
-                taskFilter && "border-fmu-navy/40 text-fmu-navy",
+                taskFilter && "border-fmu-green/40 text-fmu-green",
               )}
             >
               {taskFilter ? (
-                <>
-                  <span className="max-w-[14ch] truncate">
-                    #{filterLabel ?? "Task"}
-                  </span>
-                </>
+                <span className="max-w-[14ch] truncate">
+                  #{filterLabel ?? "Task"}
+                </span>
               ) : (
                 <>All tasks</>
               )}

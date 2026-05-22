@@ -80,7 +80,7 @@ export default function CustomerDocumentsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 px-8 py-10">
+    <div className="w-full space-y-6 px-8 py-8">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-semibold tracking-tight text-ink">
           Documents

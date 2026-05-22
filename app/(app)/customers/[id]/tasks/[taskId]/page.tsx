@@ -5,15 +5,20 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { GenericTaskRenderer } from "@/components/tasks/generic-task-renderer";
+import { TaskChatEmbed } from "@/components/chat/task-chat-embed";
 import { getTaskTypeDef } from "@/modules/registry";
 
 /**
- * Generic task detail page.
+ * Task detail page.
  *
- * Looks up the task type in the module registry. If the type declares a
- * custom renderer (e.g. accounting.bank_rec → the 4-step wizard), it's
- * rendered here. Otherwise we fall back to `GenericTaskRenderer`, which
- * handles the four core.* task types in Phase 1.3.
+ * Full-width canvas. Left column: the task renderer (custom from the module
+ * manifest, or `GenericTaskRenderer` fallback). Right column: a discussion
+ * embed showing only messages tagged with this task. Replies from the embed
+ * auto-tag, so the conversation stays scoped without manual #-referencing.
+ *
+ * Custom renderers that already own the full-width canvas (e.g. multi-step
+ * wizards) can declare `fullWidth: true` in their type def and they get
+ * rendered without the chat embed alongside.
  */
 export default function CustomerTaskDetailPage() {
   const params = useParams<{ id: string; taskId: string }>();
@@ -23,24 +28,41 @@ export default function CustomerTaskDetailPage() {
   const task = useQuery(api.tasks.get, { taskId });
 
   if (task === undefined) {
-    return <div className="p-8 text-sm text-ink-3">Loading…</div>;
+    return (
+      <div className="w-full px-8 py-8 text-sm text-ink-3">
+        Loading…
+      </div>
+    );
   }
 
   if (task === null) {
     return (
-      <div className="mx-auto max-w-3xl px-8 py-10 text-sm text-ink-3">
+      <div className="w-full px-8 py-8 text-sm text-ink-3">
         Task not found.
       </div>
     );
   }
 
-  // Renderer dispatch
   const typeDef = getTaskTypeDef(task.type);
   const CustomRenderer = typeDef?.renderer;
 
-  if (CustomRenderer) {
+  // Custom renderers that want the whole canvas (wizards etc.) opt out.
+  if (CustomRenderer && typeDef?.fullWidth) {
     return <CustomRenderer task={task} taskId={task._id} />;
   }
 
-  return <GenericTaskRenderer task={task} customerId={customerId} />;
+  return (
+    <div className="w-full px-8 py-8">
+      <div className="grid h-[calc(100vh-8rem)] min-h-[640px] gap-6 lg:grid-cols-[minmax(0,1fr)_440px] xl:grid-cols-[minmax(0,1fr)_480px]">
+        <div className="min-w-0 overflow-y-auto">
+          {CustomRenderer ? (
+            <CustomRenderer task={task} taskId={task._id} />
+          ) : (
+            <GenericTaskRenderer task={task} customerId={customerId} />
+          )}
+        </div>
+        <TaskChatEmbed customerId={customerId} taskId={task._id} />
+      </div>
+    </div>
+  );
 }

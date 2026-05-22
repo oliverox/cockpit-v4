@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import {
@@ -8,11 +8,11 @@ import {
   ArchiveRestore,
   MoreHorizontal,
   Pencil,
+  UserPlus,
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,127 +31,87 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { CustomerFormDialog } from "@/components/customers/customer-form-dialog";
-import { cn } from "@/lib/utils";
+import { ClientAccessDialog } from "@/components/customers/client-access-dialog";
+import { NewEventDialog } from "@/components/calendar/new-event-dialog";
+import { NewTaskDialog } from "@/components/tasks/new-task-dialog";
+import {
+  CalendarView,
+  useCalendarMode,
+} from "@/components/calendar/calendar-view";
+import { TaskPanel } from "@/components/calendar/task-panel";
 
-export default function CustomerDetailPage() {
+export default function CustomerHomePage() {
   const params = useParams<{ id: string }>();
   const customerId = params.id as Id<"customers">;
   const customer = useQuery(api.customers.get, { customerId });
 
   if (customer === undefined) {
-    return <div className="p-8 text-sm text-ink-3">Loading…</div>;
+    return (
+      <div className="w-full px-8 py-8 text-sm text-ink-3">
+        Loading…
+      </div>
+    );
   }
-
   if (customer === null) {
     return (
-      <div className="mx-auto max-w-3xl px-8 py-10 text-sm text-ink-3">
+      <div className="w-full px-8 py-8 text-sm text-ink-3">
         Customer not found.
       </div>
     );
   }
-
-  return <CustomerDetail customer={customer} />;
+  return <CustomerHome customer={customer} />;
 }
 
-function CustomerDetail({ customer }: { customer: Doc<"customers"> }) {
+function CustomerHome({ customer }: { customer: Doc<"customers"> }) {
   const router = useRouter();
-  const updateCustomer = useMutation(api.customers.update);
+  const customerId = customer._id;
+
   const archiveCustomer = useMutation(api.customers.archive);
   const unarchiveCustomer = useMutation(api.customers.unarchive);
 
   const [editOpen, setEditOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [newEventOpen, setNewEventOpen] = useState(false);
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
 
-  const metaRows = useMetadataRows(customer.metadata);
+  const [mode, setMode] = useCalendarMode("month");
+  const [cursor, setCursor] = useState<number>(() => Date.now());
 
-  async function onArchive() {
-    await archiveCustomer({ customerId: customer._id });
-    setArchiveOpen(false);
-  }
-  async function onUnarchive() {
-    await unarchiveCustomer({ customerId: customer._id });
-  }
+  const items = useQuery(api.calendar.upcomingForCustomer, {
+    customerId,
+    days: 120,
+  });
 
   return (
-    <div className="mx-auto max-w-3xl space-y-10 px-8 py-10">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0 flex-1 space-y-2">
-          <div className="flex items-center gap-2">
-            <div className="eyebrow">Customer</div>
-            {customer.archived && (
-              <span className="pill pill--neutral">Archived</span>
-            )}
-          </div>
-          <InlineName
-            value={customer.name}
-            onSave={(name) =>
-              updateCustomer({ customerId: customer._id, name })
-            }
-            disabled={customer.archived === true}
+    <div className="w-full px-8 py-8">
+      <Header
+        customer={customer}
+        archived={customer.archived === true}
+        onEdit={() => setEditOpen(true)}
+        onManageAccess={() => setAccessOpen(true)}
+        onArchive={() => setArchiveOpen(true)}
+        onUnarchive={() => void unarchiveCustomer({ customerId })}
+      />
+
+      <div className="grid h-[calc(100vh-12rem)] min-h-[640px] gap-6 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="min-w-0">
+          <CalendarView
+            items={items}
+            mode={mode}
+            onModeChange={setMode}
+            cursor={cursor}
+            onCursorChange={setCursor}
+            hideCustomerLabel
+            onNewEvent={() => setNewEventOpen(true)}
           />
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label="Customer actions">
-              <MoreHorizontal className="h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem
-              onSelect={() => setEditOpen(true)}
-              disabled={customer.archived === true}
-            >
-              <Pencil className="h-4 w-4" />
-              Edit details
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            {customer.archived ? (
-              <DropdownMenuItem onSelect={() => void onUnarchive()}>
-                <ArchiveRestore className="h-4 w-4" />
-                Unarchive
-              </DropdownMenuItem>
-            ) : (
-              <DropdownMenuItem
-                onSelect={() => setArchiveOpen(true)}
-                className="text-fmu-red focus:text-fmu-red"
-              >
-                <Archive className="h-4 w-4" />
-                Archive
-              </DropdownMenuItem>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <TaskPanel
+          scope="customer"
+          customerId={customerId}
+          onNewTask={() => setNewTaskOpen(true)}
+        />
       </div>
-
-      {/* Metadata */}
-      {metaRows.length > 0 && (
-        <section className="rounded-lg border border-line bg-card">
-          <div className="border-b border-line px-6 py-3">
-            <div className="eyebrow">Details</div>
-          </div>
-          <dl className="divide-y divide-line">
-            {metaRows.map(({ label, value, mono }) => (
-              <div
-                key={label}
-                className="grid grid-cols-[160px_1fr] items-baseline gap-4 px-6 py-3"
-              >
-                <dt className="text-xs uppercase tracking-wider text-ink-3">
-                  {label}
-                </dt>
-                <dd
-                  className={cn(
-                    "text-sm text-ink",
-                    mono && "mono",
-                  )}
-                >
-                  {value}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </section>
-      )}
 
       <CustomerFormDialog
         open={editOpen}
@@ -161,6 +121,25 @@ function CustomerDetail({ customer }: { customer: Doc<"customers"> }) {
           name: customer.name,
           metadata: customer.metadata,
         }}
+      />
+
+      <ClientAccessDialog
+        open={accessOpen}
+        onOpenChange={setAccessOpen}
+        customerId={customerId}
+        customerName={customer.name}
+      />
+
+      <NewEventDialog
+        open={newEventOpen}
+        onOpenChange={setNewEventOpen}
+        fixedCustomerId={customerId}
+      />
+
+      <NewTaskDialog
+        open={newTaskOpen}
+        onOpenChange={setNewTaskOpen}
+        customerId={customerId}
       />
 
       <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}>
@@ -176,7 +155,11 @@ function CustomerDetail({ customer }: { customer: Doc<"customers"> }) {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={onArchive}
+              onClick={async () => {
+                await archiveCustomer({ customerId });
+                setArchiveOpen(false);
+                router.push("/customers");
+              }}
               className="bg-fmu-red text-white hover:bg-fmu-red/90"
             >
               Archive
@@ -188,109 +171,96 @@ function CustomerDetail({ customer }: { customer: Doc<"customers"> }) {
   );
 }
 
-// ---- Helpers --------------------------------------------------------------
+// ── Header ─────────────────────────────────────────────────────────────
 
-type MetaRow = { label: string; value: string; mono?: boolean };
-
-function useMetadataRows(metadata: Doc<"customers">["metadata"]): MetaRow[] {
-  if (!metadata) return [];
-  const rows: MetaRow[] = [];
-  if (metadata.brn) rows.push({ label: "BRN", value: metadata.brn, mono: true });
-  if (metadata.vatRegistration)
-    rows.push({ label: "VAT", value: metadata.vatRegistration, mono: true });
-  if (metadata.primaryContactEmail)
-    rows.push({ label: "Contact email", value: metadata.primaryContactEmail });
-  if (metadata.primaryContactPhone)
-    rows.push({
-      label: "Contact phone",
-      value: metadata.primaryContactPhone,
-      mono: true,
-    });
-  if (metadata.timezone)
-    rows.push({ label: "Timezone", value: metadata.timezone });
-  return rows;
-}
-
-/**
- * Inline-editable headline. Click to edit; Enter to save, Escape to cancel.
- * No save button — blur or Enter commits.
- */
-function InlineName({
-  value,
-  onSave,
-  disabled,
+function Header({
+  customer,
+  archived,
+  onEdit,
+  onManageAccess,
+  onArchive,
+  onUnarchive,
 }: {
-  value: string;
-  onSave: (name: string) => Promise<unknown>;
-  disabled?: boolean;
+  customer: Doc<"customers">;
+  archived: boolean;
+  onEdit: () => void;
+  onManageAccess: () => void;
+  onArchive: () => void;
+  onUnarchive: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-  const [saving, setSaving] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!editing) setDraft(value);
-  }, [value, editing]);
-
-  async function commit() {
-    const next = draft.trim();
-    if (!next || next === value) {
-      setDraft(value);
-      setEditing(false);
-      return;
-    }
-    setSaving(true);
-    try {
-      await onSave(next);
-      setEditing(false);
-    } catch (err) {
-      console.error(err);
-      setDraft(value);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  if (editing) {
-    return (
-      <Input
-        ref={inputRef}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => void commit()}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            void commit();
-          } else if (e.key === "Escape") {
-            setDraft(value);
-            setEditing(false);
-          }
-        }}
-        autoFocus
-        disabled={saving}
-        maxLength={200}
-        className="h-auto rounded-md border-line-2 px-3 py-1 text-3xl font-semibold tracking-tight text-ink"
-      />
-    );
-  }
+  const metaChips = buildMetaChips(customer.metadata);
 
   return (
-    <button
-      type="button"
-      onClick={() => !disabled && setEditing(true)}
-      disabled={disabled}
-      className={cn(
-        "group -mx-3 -my-1 inline-flex max-w-full items-center gap-2 truncate rounded-md px-3 py-1 text-left text-3xl font-semibold tracking-tight text-ink",
-        !disabled && "hover:bg-card-tint",
-        disabled && "cursor-not-allowed opacity-70",
-      )}
-    >
-      <span className="truncate">{value}</span>
-      {!disabled && (
-        <Pencil className="h-4 w-4 shrink-0 text-ink-4 opacity-0 transition-opacity group-hover:opacity-100" />
-      )}
-    </button>
+    <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
+      <div className="min-w-0 flex-1">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="eyebrow">Customer</span>
+          {archived && <span className="pill pill--neutral">Archived</span>}
+        </div>
+        <h1 className="truncate text-3xl font-semibold tracking-tight text-ink">
+          {customer.name}
+        </h1>
+        {metaChips.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-3">
+            {metaChips.map((c, i) => (
+              <span key={c.label} className="flex items-center gap-1.5">
+                {i > 0 && <span className="text-ink-4">·</span>}
+                <span className="eyebrow" style={{ letterSpacing: "0.08em" }}>
+                  {c.label}
+                </span>
+                <span className={c.mono ? "num" : ""}>{c.value}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="icon" aria-label="Customer actions">
+            <MoreHorizontal className="h-4 w-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuItem onSelect={onEdit} disabled={archived}>
+            <Pencil className="h-4 w-4" />
+            Edit details
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onManageAccess} disabled={archived}>
+            <UserPlus className="h-4 w-4" />
+            Client access
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          {archived ? (
+            <DropdownMenuItem onSelect={onUnarchive}>
+              <ArchiveRestore className="h-4 w-4" />
+              Unarchive
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem
+              onSelect={onArchive}
+              className="text-fmu-red focus:text-fmu-red"
+            >
+              <Archive className="h-4 w-4" />
+              Archive
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </header>
   );
+}
+
+type MetaChip = { label: string; value: string; mono?: boolean };
+
+function buildMetaChips(meta: Doc<"customers">["metadata"]): MetaChip[] {
+  if (!meta) return [];
+  const out: MetaChip[] = [];
+  if (meta.brn) out.push({ label: "BRN", value: meta.brn, mono: true });
+  if (meta.vatRegistration)
+    out.push({ label: "VAT", value: meta.vatRegistration, mono: true });
+  if (meta.primaryContactEmail)
+    out.push({ label: "Email", value: meta.primaryContactEmail });
+  if (meta.primaryContactPhone)
+    out.push({ label: "Phone", value: meta.primaryContactPhone, mono: true });
+  return out;
 }

@@ -21,7 +21,6 @@ import { v } from "convex/values";
 
 const memberRole = v.union(
   v.literal("owner"),
-  v.literal("admin"),
   v.literal("member"),
 );
 
@@ -84,15 +83,13 @@ export default defineSchema({
   // 1. Tenancy & people
   // ===================================================================
 
-  /** A firm (tenant). One per Clerk Organization. */
+  /** A firm (tenant). Created entirely inside Cockpit; no external linkage. */
   workspaces: defineTable({
     name: v.string(),
-    clerkOrgId: v.string(),
     installedModules: v.array(v.string()),
     industryTags: v.optional(v.array(v.string())),
     archived: v.optional(v.boolean()),
-  })
-    .index("by_clerk_org", ["clerkOrgId"]),
+  }),
 
   /** Firm members. A user can belong to multiple workspaces. */
   memberships: defineTable({
@@ -109,7 +106,7 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_workspace", ["workspaceId"]),
 
-  /** Pending invitations into a workspace. */
+  /** Pending team-member invitations into a workspace. */
   team_invites: defineTable({
     workspaceId: v.id("workspaces"),
     email: v.string(),
@@ -119,10 +116,14 @@ export default defineSchema({
     invitedBy: v.id("users"),
     status: inviteStatus,
     expiresAt: v.optional(v.number()),
+    acceptedAt: v.optional(v.number()),
+    acceptedMembershipId: v.optional(v.id("memberships")),
     clerkInvitationId: v.optional(v.string()),
+    clerkInviteError: v.optional(v.string()),
   })
     .index("by_workspace_and_email", ["workspaceId", "email"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_email_and_status", ["email", "status"]),
 
   /**
    * Both human users (Clerk-backed) and AI agents.
@@ -207,6 +208,36 @@ export default defineSchema({
     .index("by_customer_and_user", ["customerId", "userId"])
     .index("by_user", ["userId"])
     .index("by_customer", ["customerId"]),
+
+  /**
+   * Pending portal invites — used when the firm invites an email that
+   * doesn't yet match a Convex user. Resolved into `customer_access` rows
+   * by `ensureUser` on first sign-in matching the email.
+   *
+   * `clerkInvitationId` is set when the Clerk Invitations API successfully
+   * dispatches a magic-link email. Stays null when Clerk is misconfigured
+   * (env var missing) or the API call fails — the manual share-the-URL
+   * fallback still works in that case.
+   */
+  client_invites: defineTable({
+    customerId: v.id("customers"),
+    workspaceId: v.id("workspaces"),
+    email: v.string(),
+    role: v.union(v.literal("client_owner"), v.literal("client_viewer")),
+    invitedBy: v.id("users"),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("accepted"),
+      v.literal("revoked"),
+    ),
+    expiresAt: v.optional(v.number()),
+    acceptedAt: v.optional(v.number()),
+    acceptedAccessId: v.optional(v.id("customer_access")),
+    clerkInvitationId: v.optional(v.string()),
+    clerkInviteError: v.optional(v.string()),
+  })
+    .index("by_customer", ["customerId"])
+    .index("by_email_and_status", ["email", "status"]),
 
   // ===================================================================
   // 3. Documents & tasks
@@ -388,6 +419,8 @@ export default defineSchema({
     attachments: v.optional(v.array(v.id("documents"))),
     /** @-mentions (small, bounded) */
     mentions: v.optional(v.array(v.id("users"))),
+    /** #task references — clickable chips, filterable. Bounded (≤ ~10). */
+    taskRefs: v.optional(v.array(v.id("tasks"))),
 
     replyToId: v.optional(v.id("messages")),
     editedAt: v.optional(v.number()),

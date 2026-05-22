@@ -1,6 +1,8 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { tryGetActor } from "./lib/auth";
+import { consumePendingClientInvites } from "./customers";
+import { consumePendingTeamInvites } from "./team";
 
 /**
  * Upsert the current Clerk user into our `users` table.
@@ -53,44 +55,11 @@ export const ensureUser = mutation({
       });
     }
 
-    // Auto-mirror Clerk organisation membership.
-    // When the user signs in with an active org context (Clerk JWT includes
-    // {{org.id}} and {{org.role}}), and we have a Cockpit workspace
-    // pointing at that Clerk org, auto-create a Cockpit membership for them.
-    // This covers team-invite acceptance flows.
-    const clerkOrgId = (identity as { organizationId?: string })
-      .organizationId;
-    const clerkOrgRole = (identity as { organizationRole?: string })
-      .organizationRole;
-    if (clerkOrgId) {
-      const workspace = await ctx.db
-        .query("workspaces")
-        .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", clerkOrgId))
-        .unique();
-      if (workspace) {
-        const existingMembership = await ctx.db
-          .query("memberships")
-          .withIndex("by_workspace_and_user", (q) =>
-            q.eq("workspaceId", workspace._id).eq("userId", userId),
-          )
-          .unique();
-        if (!existingMembership) {
-          // Map Clerk role → Cockpit role (best effort)
-          const role =
-            clerkOrgRole === "org:admin" || clerkOrgRole === "admin"
-              ? ("admin" as const)
-              : ("member" as const);
-          await ctx.db.insert("memberships", {
-            workspaceId: workspace._id,
-            userId,
-            role,
-            scope: "all",
-          });
-        } else if (existingMembership.archived) {
-          await ctx.db.patch(existingMembership._id, { archived: false });
-        }
-      }
-    }
+    // Materialize any pending team or portal invites that match this user's
+    // email. Team invites take priority — if someone was invited as a firm
+    // member, that's their primary role.
+    await consumePendingTeamInvites(ctx, userId, identity.email);
+    await consumePendingClientInvites(ctx, userId, identity.email);
 
     // Auto-promote founders to superadmin based on the SUPERADMIN_EMAILS
     // env var on the Convex deployment (comma-separated). Idempotent.

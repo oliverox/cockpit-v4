@@ -42,5 +42,9 @@ export default function PortalLayout({
     return null;
   }
 
-  return <PortalShell>{children}</PortalShell>;
+  return (
+    <div className="h-screen">
+      <PortalShell>{children}</PortalShell>
+    </div>
+  );
 }

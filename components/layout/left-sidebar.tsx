@@ -4,11 +4,9 @@ import Link from "next/link";
 import { usePathname, useParams } from "next/navigation";
 import {
   Users,
-  Inbox,
   Calendar,
-  MessagesSquare,
+  MessageCircle,
   Settings,
-  LayoutGrid,
   FolderOpen,
   ListTodo,
   MessageSquare,
@@ -20,9 +18,10 @@ import { RailButton } from "./rail-button";
 /**
  * Primary (navy) left rail.
  *
- * Top-level (always visible): Customers, Inbox, Calendar, Team, Settings.
+ * Top-level (always visible): Customers, Calendar, Settings.
  * When inside a customer (/customers/[id]/...), additional customer-context
- * entries appear: Dashboard, Documents, Tasks, Chat.
+ * entries appear: Documents, Tasks, Chat. The customer-home (calendar +
+ * tasks panel) is reached via the breadcrumb / customer name itself.
  */
 export function LeftSidebar() {
   const pathname = usePathname();
@@ -52,16 +51,16 @@ export function LeftSidebar() {
           active={pathname === "/customers" || (pathname.startsWith("/customers/") && !inCustomerContext)}
         />
         <RailButton
-          href="/inbox"
-          icon={Inbox}
-          label="Inbox"
-          active={pathname.startsWith("/inbox")}
+          href="/calendar"
+          icon={Calendar}
+          label="Calendar"
+          active={pathname === "/calendar"}
         />
         <RailButton
-          href="/team"
-          icon={MessagesSquare}
-          label="Team chat"
-          active={pathname.startsWith("/team")}
+          href="/activity"
+          icon={MessageCircle}
+          label="Client conversations"
+          active={pathname.startsWith("/activity")}
         />
       </nav>
 
@@ -70,12 +69,6 @@ export function LeftSidebar() {
         <>
           <div className="my-2 h-px w-6 bg-sidebar-border" aria-hidden />
           <nav className="flex flex-col items-center gap-1">
-            <RailButton
-              href={`/customers/${customerId}`}
-              icon={LayoutGrid}
-              label="Dashboard"
-              active={pathname === `/customers/${customerId}`}
-            />
             <RailButton
               href={`/customers/${customerId}/documents`}
               icon={FolderOpen}
@@ -93,12 +86,6 @@ export function LeftSidebar() {
               icon={MessageSquare}
               label="Chat"
               active={pathname.startsWith(`/customers/${customerId}/chat`)}
-            />
-            <RailButton
-              href={`/customers/${customerId}/calendar`}
-              icon={Calendar}
-              label="Calendar"
-              active={pathname.startsWith(`/customers/${customerId}/calendar`)}
             />
           </nav>
         </>

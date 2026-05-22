@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useOrganizationList, useClerk } from "@clerk/nextjs";
 import { useMutation } from "convex/react";
 import { ArrowRight, PlaneTakeoff } from "lucide-react";
 import { api } from "@/convex/_generated/api";
@@ -12,19 +11,13 @@ import { Label } from "@/components/ui/label";
 
 export default function CreateWorkspacePage() {
   const router = useRouter();
-  const { createOrganization, isLoaded: orgListLoaded } = useOrganizationList();
-  const { setActive } = useClerk();
   const createWorkspace = useMutation(api.workspaces.create);
 
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const canSubmit =
-    orgListLoaded &&
-    createOrganization !== undefined &&
-    name.trim().length > 0 &&
-    !submitting;
+  const canSubmit = name.trim().length > 0 && !submitting;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -32,9 +25,7 @@ export default function CreateWorkspacePage() {
     setSubmitting(true);
     setError(null);
     try {
-      const org = await createOrganization!({ name: name.trim() });
-      await createWorkspace({ name: name.trim(), clerkOrgId: org.id });
-      await setActive({ organization: org.id });
+      await createWorkspace({ name: name.trim() });
       router.push("/customers");
     } catch (err) {
       console.error("Workspace creation failed:", err);
@@ -88,7 +79,7 @@ export default function CreateWorkspacePage() {
           <div className="space-y-4">
             <div className="eyebrow">Step 01</div>
             <h2 className="text-[2rem] font-semibold leading-[1.15] tracking-tight text-ink">
-              Create your workspace
+              Create your firm
             </h2>
             <div className="h-[3px] w-10 bg-fmu-yellow" />
             <p className="max-w-xs text-sm text-ink-3">
@@ -102,7 +93,7 @@ export default function CreateWorkspacePage() {
                 htmlFor="workspace-name"
                 className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-3"
               >
-                Workspace name
+                Firm name
               </Label>
               <Input
                 id="workspace-name"
@@ -139,7 +130,7 @@ export default function CreateWorkspacePage() {
                 </span>
               ) : (
                 <>
-                  Create workspace
+                  Create firm
                   <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
                 </>
               )}

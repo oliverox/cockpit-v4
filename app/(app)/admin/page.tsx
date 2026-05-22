@@ -78,9 +78,6 @@ export default function AdminWorkspacesPage() {
                 <th className="px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
                   Created
                 </th>
-                <th className="px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
-                  Clerk org
-                </th>
                 <th className="px-4 py-2.5"></th>
               </tr>
             </thead>
@@ -106,11 +103,6 @@ export default function AdminWorkspacesPage() {
                     <td className="px-4 py-3">
                       <span className="num text-sm text-ink-3">
                         {new Date(w._creationTime).toLocaleDateString()}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="mono text-xs text-ink-3">
-                        {w.clerkOrgId.slice(0, 18)}…
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right">

@@ -148,3 +148,67 @@ export const listAllWorkspaces = query({
     return await ctx.db.query("workspaces").take(200);
   },
 });
+
+/**
+ * Dev-only: wipe all firm/customer/workflow data while keeping `users` and
+ * `superadmins` rows. Useful after a structural refactor (e.g. dropping
+ * Clerk Organizations). Superadmin-gated.
+ *
+ *   npx convex run superadmin:devResetWorkspaceData
+ *
+ * Order matters: leaf tables first so deletes don't cascade-leave stale fks.
+ */
+export const devResetWorkspaceData = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
+      .unique();
+    if (!user) throw new Error("User not provisioned");
+    const sa = await ctx.db
+      .query("superadmins")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .first();
+    if (!sa || sa.archived) {
+      throw new Error("Only superadmins can run this");
+    }
+
+    const tablesInOrder = [
+      "task_approvals",
+      "tasks",
+      "documents",
+      "messages",
+      "thread_members",
+      "threads",
+      "calendar_events",
+      "events",
+      "inbox_items",
+      "audit_log",
+      "module_settings",
+      "connectors",
+      "connector_imports",
+      "control_tower_sessions",
+      "customer_assignments",
+      "customer_access",
+      "client_invites",
+      "team_invites",
+      "customers",
+      "memberships",
+      "workspaces",
+      "superadmin_sessions",
+    ] as const;
+
+    let total = 0;
+    for (const table of tablesInOrder) {
+      const rows = await ctx.db.query(table).take(5000);
+      for (const r of rows) {
+        await ctx.db.delete(r._id);
+        total++;
+      }
+    }
+    return { deleted: total };
+  },
+});

@@ -3,19 +3,19 @@ import { v } from "convex/values";
 import { tryGetActor } from "./lib/auth";
 
 /**
- * Create a workspace after the client has created the matching Clerk
- * organisation. Idempotent: if a workspace already exists for this
- * `clerkOrgId`, we just ensure the caller has an owner membership and
- * return the existing row.
+ * Create a workspace (firm). Cockpit-only — no Clerk Organization involved.
  *
- * Trust model for Phase 1.0: we accept the client-supplied `clerkOrgId`.
- * Server-side verification (via a Convex action calling Clerk's admin API,
- * or a Clerk webhook) will be added in a later step.
+ * Rules:
+ *   • Caller must be signed in and provisioned via `ensureUser`.
+ *   • One user can only own one firm. If the caller already has any
+ *     non-archived membership, refuse — they should use a different email
+ *     if they're starting a second firm.
+ *   • The creator gets a `role: "owner"` membership scoped to all customers.
  */
 export const create = mutation({
   args: {
     name: v.string(),
-    clerkOrgId: v.string(),
+    industryTags: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
@@ -28,40 +28,21 @@ export const create = mutation({
     if (!user) throw new Error("User not provisioned. Call ensureUser first.");
 
     const name = args.name.trim();
-    if (!name) throw new Error("Workspace name cannot be empty");
-    if (name.length > 100) throw new Error("Workspace name too long");
+    if (!name) throw new Error("Firm name cannot be empty");
+    if (name.length > 100) throw new Error("Firm name too long");
 
-    // Idempotent path: workspace already linked to this Clerk org
-    const existing = await ctx.db
-      .query("workspaces")
-      .withIndex("by_clerk_org", (q) => q.eq("clerkOrgId", args.clerkOrgId))
-      .unique();
-
-    if (existing) {
-      // Make sure the caller has a membership on it (recovery from partial setup)
-      const membership = await ctx.db
-        .query("memberships")
-        .withIndex("by_workspace_and_user", (q) =>
-          q.eq("workspaceId", existing._id).eq("userId", user._id),
-        )
-        .unique();
-
-      if (!membership) {
-        await ctx.db.insert("memberships", {
-          workspaceId: existing._id,
-          userId: user._id,
-          role: "owner",
-          scope: "all",
-        });
-      }
-      return existing._id;
+    const existingMembership = await ctx.db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", user._id))
+      .first();
+    if (existingMembership && !existingMembership.archived) {
+      throw new Error("You already belong to a firm.");
     }
 
-    // Fresh creation
     const workspaceId = await ctx.db.insert("workspaces", {
       name,
-      clerkOrgId: args.clerkOrgId,
       installedModules: [],
+      industryTags: args.industryTags,
     });
 
     await ctx.db.insert("memberships", {
@@ -78,7 +59,7 @@ export const create = mutation({
       subjectTable: "workspaces",
       subjectId: workspaceId,
       action: "create",
-      after: { name, clerkOrgId: args.clerkOrgId },
+      after: { name },
     });
 
     return workspaceId;
@@ -107,39 +88,6 @@ export const getActive = query({
 
     if (!workspaceId) return null;
     return await ctx.db.get(workspaceId);
-  },
-});
-
-/**
- * Workspaces the current user belongs to (via memberships). Used by the
- * future workspace switcher. Excludes archived memberships.
- */
-export const listMine = query({
-  args: {},
-  handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return [];
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
-      .unique();
-    if (!user) return [];
-
-    const memberships = await ctx.db
-      .query("memberships")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .take(50);
-
-    const workspaces = await Promise.all(
-      memberships
-        .filter((m) => !m.archived)
-        .map((m) => ctx.db.get(m.workspaceId)),
-    );
-
-    return workspaces.filter(
-      (w): w is NonNullable<typeof w> => w !== null,
-    );
   },
 });
 

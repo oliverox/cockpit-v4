@@ -203,7 +203,11 @@ export const upcoming = query({
   },
 });
 
-/** Per-customer calendar — same item shape, filtered to one customer. */
+/** Per-customer calendar — same item shape, filtered to one customer.
+ *
+ * Client actors see only client-visible tasks and module-generated events
+ * (manual firm-internal events are hidden). Firm actors see everything.
+ */
 export const upcomingForCustomer = query({
   args: { customerId: v.id("customers"), days: v.optional(v.number()) },
   handler: async (ctx, args): Promise<CalendarItem[]> => {
@@ -219,6 +223,7 @@ export const upcomingForCustomer = query({
     const day = 24 * 60 * 60 * 1000;
     const from = now - 7 * day;
     const to = now + days * day;
+    const isClientActor = actor.kind === "client";
 
     const events = await ctx.db
       .query("calendar_events")
@@ -246,11 +251,19 @@ export const upcomingForCustomer = query({
         t.dueDate <= to &&
         t.status !== "cancelled" &&
         t.status !== "firm_approved" &&
-        t.status !== "filed",
+        t.status !== "filed" &&
+        (!isClientActor || t.clientVisible),
+    );
+
+    const relevantEvents = events.filter(
+      // Manual firm-internal events stay firm-only until we add an explicit
+      // visibility flag on calendar_events. Module-generated events ride on
+      // their underlying task's visibility.
+      (e) => !isClientActor || e.source !== "manual",
     );
 
     const items: CalendarItem[] = [
-      ...events.map((e): CalendarItem => ({
+      ...relevantEvents.map((e): CalendarItem => ({
         kind: "event",
         id: e._id,
         title: e.title,

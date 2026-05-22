@@ -30,7 +30,7 @@ export type MemberActor = {
   user: Doc<"users">;
   workspaceId: Id<"workspaces">;
   membership: Doc<"memberships">;
-  role: "owner" | "admin" | "member";
+  role: "owner" | "member";
   scope: "all" | "assigned_only";
 };
 
@@ -206,12 +206,12 @@ export function canActInWorkspace(
 
 export function canManageTeam(actor: Actor): boolean {
   if (isSuperadmin(actor)) return actor.activeWorkspaceId !== undefined;
-  return isMember(actor) && (actor.role === "owner" || actor.role === "admin");
+  return isMember(actor) && actor.role === "owner";
 }
 
 export function canManageModules(actor: Actor): boolean {
   if (isSuperadmin(actor)) return actor.activeWorkspaceId !== undefined;
-  return isMember(actor) && (actor.role === "owner" || actor.role === "admin");
+  return isMember(actor) && actor.role === "owner";
 }
 
 /** Only superadmins can list all workspaces across tenants. */

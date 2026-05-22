@@ -9,9 +9,9 @@
  */
 
 import type * as calendar from "../calendar.js";
+import type * as clerkInvites from "../clerkInvites.js";
 import type * as customers from "../customers.js";
 import type * as documents from "../documents.js";
-import type * as inbox from "../inbox.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as messages from "../messages.js";
 import type * as superadmin from "../superadmin.js";
@@ -29,9 +29,9 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   calendar: typeof calendar;
+  clerkInvites: typeof clerkInvites;
   customers: typeof customers;
   documents: typeof documents;
-  inbox: typeof inbox;
   "lib/auth": typeof lib_auth;
   messages: typeof messages;
   superadmin: typeof superadmin;

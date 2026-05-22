@@ -10,6 +10,7 @@ import {
   tryGetActor,
 } from "./lib/auth";
 import { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 
 const customerMetadataValidator = v.object({
   brn: v.optional(v.string()),
@@ -139,7 +140,7 @@ export const archive = mutation({
       throw new Error("No access to this customer");
     }
     if (!canManageTeam(actor)) {
-      throw new Error("Only admins can archive customers");
+      throw new Error("Only the firm owner can archive customers");
     }
     if (customer.archived) return args.customerId;
 
@@ -174,7 +175,7 @@ export const unarchive = mutation({
       throw new Error("No access to this customer");
     }
     if (!canManageTeam(actor)) {
-      throw new Error("Only admins can unarchive customers");
+      throw new Error("Only the firm owner can unarchive customers");
     }
     if (!customer.archived) return args.customerId;
 
@@ -303,3 +304,258 @@ export const list = query({
       .filter(visibleFilter);
   },
 });
+
+// ===== Client portal access =============================================
+
+const clientRoleValidator = v.union(
+  v.literal("client_owner"),
+  v.literal("client_viewer"),
+);
+
+/** Invite a client by email, or link immediately if the email matches a user. */
+export const inviteClient = mutation({
+  args: {
+    customerId: v.id("customers"),
+    email: v.string(),
+    role: v.optional(clientRoleValidator),
+  },
+  handler: async (ctx, args) => {
+    const actor = await getActor(ctx);
+    if (!canManageTeam(actor)) {
+      throw new Error("Only the firm owner can manage client access");
+    }
+    const customer = await ctx.db.get(args.customerId);
+    if (!customer) throw new Error("Customer not found");
+    if (!canActInWorkspace(actor, customer.workspaceId)) {
+      throw new Error("No access to this workspace");
+    }
+    const email = args.email.trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      throw new Error("Invalid email");
+    }
+    const role = args.role ?? "client_owner";
+
+    // If a user with this email already exists, link them immediately.
+    const existingUser = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", email))
+      .first();
+
+    if (existingUser) {
+      const existingAccess = await ctx.db
+        .query("customer_access")
+        .withIndex("by_customer_and_user", (q) =>
+          q.eq("customerId", args.customerId).eq("userId", existingUser._id),
+        )
+        .first();
+      if (existingAccess) {
+        return { kind: "already_linked" as const, accessId: existingAccess._id };
+      }
+      const accessId = await ctx.db.insert("customer_access", {
+        customerId: args.customerId,
+        userId: existingUser._id,
+        role,
+        invitedBy: actor.userId,
+        invitedAt: Date.now(),
+      });
+      await ctx.db.insert("audit_log", {
+        workspaceId: customer.workspaceId,
+        actorId: actor.userId,
+        subjectKind: "customer",
+        subjectTable: "customer_access",
+        subjectId: accessId,
+        action: "create",
+        after: { email, role, customerId: args.customerId },
+        superadminContext: isSuperadmin(actor)
+          ? { reason: actor.sessionReason }
+          : undefined,
+      });
+      return { kind: "linked" as const, accessId };
+    }
+
+    // Otherwise queue a pending invite that ensureUser will resolve.
+    const existingInvite = await ctx.db
+      .query("client_invites")
+      .withIndex("by_email_and_status", (q) =>
+        q.eq("email", email).eq("status", "pending"),
+      )
+      .collect();
+    const dup = existingInvite.find(
+      (i) => i.customerId === args.customerId && i.status === "pending",
+    );
+    if (dup) {
+      return { kind: "already_invited" as const, inviteId: dup._id };
+    }
+
+    const inviteId = await ctx.db.insert("client_invites", {
+      customerId: args.customerId,
+      workspaceId: customer.workspaceId,
+      email,
+      role,
+      invitedBy: actor.userId,
+      status: "pending",
+    });
+
+    // Dispatch a real invitation email via Clerk. The action runs out-of-band;
+    // on success it patches `clerkInvitationId` onto the row. If Clerk isn't
+    // configured the invite stays pending and resolves on next sign-in via
+    // the email-match path in `ensureUser`.
+    await ctx.scheduler.runAfter(
+      0,
+      internal.clerkInvites.sendInviteEmail,
+      { inviteId },
+    );
+
+    return { kind: "pending" as const, inviteId };
+  },
+});
+
+/** Revoke an active customer_access row. */
+export const revokeClientAccess = mutation({
+  args: { accessId: v.id("customer_access") },
+  handler: async (ctx, args) => {
+    const actor = await getActor(ctx);
+    if (!canManageTeam(actor)) {
+      throw new Error("Only the firm owner can manage client access");
+    }
+    const access = await ctx.db.get(args.accessId);
+    if (!access) throw new Error("Access row not found");
+    const customer = await ctx.db.get(access.customerId);
+    if (!customer) throw new Error("Customer not found");
+    if (!canActInWorkspace(actor, customer.workspaceId)) {
+      throw new Error("No access to this workspace");
+    }
+    await ctx.db.delete(args.accessId);
+    await ctx.db.insert("audit_log", {
+      workspaceId: customer.workspaceId,
+      actorId: actor.userId,
+      subjectKind: "customer",
+      subjectTable: "customer_access",
+      subjectId: args.accessId,
+      action: "delete",
+      before: {
+        customerId: access.customerId,
+        userId: access.userId,
+        role: access.role,
+      },
+      superadminContext: isSuperadmin(actor)
+        ? { reason: actor.sessionReason }
+        : undefined,
+    });
+    return null;
+  },
+});
+
+/** Cancel a still-pending invite. */
+export const cancelClientInvite = mutation({
+  args: { inviteId: v.id("client_invites") },
+  handler: async (ctx, args) => {
+    const actor = await getActor(ctx);
+    if (!canManageTeam(actor)) {
+      throw new Error("Only the firm owner can manage client access");
+    }
+    const invite = await ctx.db.get(args.inviteId);
+    if (!invite) throw new Error("Invite not found");
+    if (!canActInWorkspace(actor, invite.workspaceId)) {
+      throw new Error("No access to this workspace");
+    }
+    if (invite.status !== "pending") {
+      // Idempotent: deleting an already-accepted invite isn't useful.
+      return null;
+    }
+    await ctx.db.patch(args.inviteId, { status: "revoked" });
+    return null;
+  },
+});
+
+/** List active access rows + pending invites for a customer. */
+export const listClientAccess = query({
+  args: { customerId: v.id("customers") },
+  handler: async (ctx, args) => {
+    const actor = await tryGetActor(ctx);
+    if (!actor) return { active: [], pending: [] };
+    const customer = await ctx.db.get(args.customerId);
+    if (!customer) return { active: [], pending: [] };
+    if (!(await canSeeCustomer(ctx, actor, args.customerId))) {
+      return { active: [], pending: [] };
+    }
+
+    const accessRows = await ctx.db
+      .query("customer_access")
+      .withIndex("by_customer", (q) => q.eq("customerId", args.customerId))
+      .take(100);
+    const users = await Promise.all(accessRows.map((a) => ctx.db.get(a.userId)));
+    const active = accessRows.map((a, i) => {
+      const u = users[i];
+      return {
+        accessId: a._id,
+        userId: a.userId,
+        role: a.role,
+        invitedAt: a.invitedAt,
+        lastSeenAt: a.lastSeenAt ?? null,
+        displayName: u?.displayName ?? "Unknown",
+        email: u?.email ?? null,
+        avatarUrl: u?.avatarUrl ?? null,
+      };
+    });
+
+    const invites = await ctx.db
+      .query("client_invites")
+      .withIndex("by_customer", (q) => q.eq("customerId", args.customerId))
+      .take(100);
+    const pending = invites
+      .filter((i) => i.status === "pending")
+      .map((i) => ({
+        inviteId: i._id,
+        email: i.email,
+        role: i.role,
+        invitedAt: i._creationTime,
+      }));
+
+    return { active, pending };
+  },
+});
+
+/**
+ * INTERNAL: resolve all pending invites for an email into customer_access
+ * rows. Called from `ensureUser` after the user row exists. Idempotent.
+ */
+export async function consumePendingClientInvites(
+  ctx: import("./_generated/server").MutationCtx,
+  userId: Id<"users">,
+  email: string | undefined,
+) {
+  if (!email) return;
+  const normalized = email.toLowerCase();
+  const pending = await ctx.db
+    .query("client_invites")
+    .withIndex("by_email_and_status", (q) =>
+      q.eq("email", normalized).eq("status", "pending"),
+    )
+    .take(50);
+  for (const invite of pending) {
+    const existing = await ctx.db
+      .query("customer_access")
+      .withIndex("by_customer_and_user", (q) =>
+        q.eq("customerId", invite.customerId).eq("userId", userId),
+      )
+      .first();
+    let accessId: Id<"customer_access">;
+    if (existing) {
+      accessId = existing._id;
+    } else {
+      accessId = await ctx.db.insert("customer_access", {
+        customerId: invite.customerId,
+        userId,
+        role: invite.role,
+        invitedBy: invite.invitedBy,
+        invitedAt: Date.now(),
+      });
+    }
+    await ctx.db.patch(invite._id, {
+      status: "accepted",
+      acceptedAt: Date.now(),
+      acceptedAccessId: accessId,
+    });
+  }
+}

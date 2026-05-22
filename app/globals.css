@@ -126,6 +126,22 @@
   --sidebar-ring: var(--fmu-yellow);
 }
 
+/**
+ * Client-portal rail — same shape as the firm rail but green.
+ * Scope-overrides the sidebar custom properties so RailButton (and any
+ * other utility binding to `--sidebar-*`) reads the green palette inside.
+ */
+.portal-rail {
+  --sidebar: var(--fmu-green);
+  --sidebar-foreground: #c8dccf;
+  --sidebar-primary: var(--fmu-yellow);
+  --sidebar-primary-foreground: var(--fmu-green);
+  --sidebar-accent: rgba(255, 255, 255, 0.08);
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: rgba(255, 255, 255, 0.10);
+  --sidebar-ring: var(--fmu-yellow);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;
