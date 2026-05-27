@@ -1,5 +1,4 @@
 import { mutation, query } from "./_generated/server";
-import { v } from "convex/values";
 import { tryGetActor } from "./lib/auth";
 import { consumePendingClientInvites } from "./customers";
 import { consumePendingTeamInvites } from "./team";

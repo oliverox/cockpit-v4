@@ -1,6 +1,5 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
-import { tryGetActor, isSuperadmin } from "./lib/auth";
 
 /**
  * Lightweight predicate — does the current user have a superadmin row?
@@ -90,32 +89,6 @@ export const enterWorkspace = mutation({
     });
 
     return sessionId;
-  },
-});
-
-/** End the current superadmin session, if any. */
-export const exitWorkspace = mutation({
-  args: {},
-  handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerk_id", (q) => q.eq("clerkId", identity.subject))
-      .unique();
-    if (!user) return null;
-
-    const current = await ctx.db
-      .query("superadmin_sessions")
-      .withIndex("by_user", (q) => q.eq("userId", user._id))
-      .order("desc")
-      .first();
-
-    if (current && current.endedAt === undefined) {
-      await ctx.db.patch(current._id, { endedAt: Date.now() });
-    }
-    return null;
   },
 });
 
