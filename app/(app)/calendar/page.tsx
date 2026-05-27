@@ -9,6 +9,8 @@ import {
   useCalendarMode,
 } from "@/components/calendar/calendar-view";
 import { TaskPanel } from "@/components/calendar/task-panel";
+import { PageShell } from "@/components/layout/page-shell";
+import { PageHeader } from "@/components/layout/page-header";
 
 /**
  * Workspace-wide calendar — every customer's events + tasks-with-dueDate,
@@ -23,15 +25,8 @@ export default function WorkspaceCalendarPage() {
   const [newEventOpen, setNewEventOpen] = useState(false);
 
   return (
-    <div className="w-full px-8 py-8">
-      <header className="mb-6 flex items-baseline justify-between gap-4">
-        <div>
-          <div className="eyebrow">Workspace</div>
-          <h1 className="text-3xl font-semibold tracking-tight text-ink">
-            Calendar
-          </h1>
-        </div>
-      </header>
+    <PageShell>
+      <PageHeader eyebrow="Workspace" title="Calendar" />
 
       <div className="grid h-[calc(100vh-12rem)] min-h-[640px] gap-6 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_420px]">
         <div className="min-w-0">
@@ -48,6 +43,6 @@ export default function WorkspaceCalendarPage() {
       </div>
 
       <NewEventDialog open={newEventOpen} onOpenChange={setNewEventOpen} />
-    </div>
+    </PageShell>
   );
 }

@@ -7,7 +7,9 @@ import { ArrowLeft, CalendarDays } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { TaskAttachments } from "@/components/tasks/task-attachments";
+import { formatDate } from "@/lib/formatters";
 import { statusDisplay, typeDisplay } from "@/lib/task-display";
+import { LoadingState } from "@/components/states";
 
 /**
  * Client-side task view. Read-only details + the file attachment widget so
@@ -23,9 +25,7 @@ export default function PortalTaskDetailPage() {
   const task = useQuery(api.tasks.get, { taskId });
 
   if (task === undefined) {
-    return (
-      <div className="w-full px-8 py-8 text-sm text-ink-3">Loading…</div>
-    );
+    return <LoadingState className="w-full px-8 py-8" />;
   }
   if (task === null) {
     return (
@@ -97,12 +97,4 @@ export default function PortalTaskDetailPage() {
       </div>
     </div>
   );
-}
-
-function formatDate(ts: number): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(ts));
 }

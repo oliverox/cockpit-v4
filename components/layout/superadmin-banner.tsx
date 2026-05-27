@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Shield } from "lucide-react";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 
@@ -14,15 +14,14 @@ import { Button } from "@/components/ui/button";
  *   • Always-on for any superadmin (even when acting as themselves in
  *     their own workspace) — visual reminder of the capability.
  *   • Shows "Viewing as <Workspace>" when a session is active.
- *   • "Switch" / "Pick workspace" links to /admin.
- *   • "Exit" ends the active session (caller reverts to their default
- *     identity — MemberActor if they have a membership, else null).
+ *   • A single "Change workspace" / "Pick workspace" link to /admin — the
+ *     superadmin's only action is moving between workspaces (entering a new
+ *     one replaces the active session).
  */
 export function SuperadminBanner() {
   const isSuperadmin = useQuery(api.superadmin.amISuperadmin);
   const whoAmI = useQuery(api.users.whoAmI);
   const workspace = useQuery(api.workspaces.getActive);
-  const exit = useMutation(api.superadmin.exitWorkspace);
 
   if (isSuperadmin !== true) return null;
 
@@ -53,28 +52,16 @@ export function SuperadminBanner() {
           </>
         )}
       </div>
-      <div className="flex items-center gap-1">
-        <Button
-          asChild
-          size="xs"
-          variant="ghost"
-          className="text-fmu-navy hover:bg-fmu-navy/10 hover:text-fmu-navy"
-        >
-          <Link href="/admin" prefetch={false}>
-            {inSession ? "Switch" : "Pick workspace"}
-          </Link>
-        </Button>
-        {inSession && (
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={() => void exit()}
-            className="text-fmu-navy hover:bg-fmu-navy/10 hover:text-fmu-navy"
-          >
-            Exit
-          </Button>
-        )}
-      </div>
+      <Button
+        asChild
+        size="xs"
+        variant="ghost"
+        className="text-fmu-navy hover:bg-fmu-navy/10 hover:text-fmu-navy"
+      >
+        <Link href="/admin" prefetch={false}>
+          {inSession ? "Change workspace" : "Pick workspace"}
+        </Link>
+      </Button>
     </div>
   );
 }

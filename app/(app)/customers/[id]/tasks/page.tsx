@@ -24,6 +24,9 @@ import {
 import { NewTaskDialog } from "@/components/tasks/new-task-dialog";
 import { statusDisplay, typeDisplay } from "@/lib/task-display";
 import { cn } from "@/lib/utils";
+import { LoadingState } from "@/components/states";
+import { PageShell } from "@/components/layout/page-shell";
+import { PageHeader } from "@/components/layout/page-header";
 
 export default function CustomerTasksPage() {
   const params = useParams<{ id: string }>();
@@ -32,16 +35,17 @@ export default function CustomerTasksPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
-    <div className="w-full space-y-6 px-8 py-8">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-semibold tracking-tight text-ink">
-          Tasks
-        </h1>
-        <Button onClick={() => setDialogOpen(true)}>
-          <Plus className="h-4 w-4" />
-          New task
-        </Button>
-      </div>
+    <PageShell className="space-y-6">
+      <PageHeader
+        title="Tasks"
+        className="mb-0"
+        actions={
+          <Button onClick={() => setDialogOpen(true)}>
+            <Plus className="h-4 w-4" />
+            New task
+          </Button>
+        }
+      />
 
       <NewTaskDialog
         open={dialogOpen}
@@ -49,9 +53,7 @@ export default function CustomerTasksPage() {
         customerId={customerId}
       />
 
-      {tasks === undefined && (
-        <p className="text-sm text-ink-3">Loading…</p>
-      )}
+      {tasks === undefined && <LoadingState />}
 
       {tasks !== undefined && tasks.length === 0 && (
         <p className="text-sm text-ink-3">No tasks yet.</p>
@@ -66,7 +68,7 @@ export default function CustomerTasksPage() {
           </ul>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }
 

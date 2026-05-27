@@ -41,13 +41,16 @@ Two layers:
   renderers, prerequisites, and guardrails. Industry modules (accounting,
   notary) are first-party for now. The registry lives at `modules/registry.ts`.
 
-Two user populations on one Clerk app:
+Two user populations on one Clerk app (Clerk Organizations are **not** used —
+dropped in Phase 2.0; membership is modelled in our own `memberships` table):
 
-- **Firm members** — Clerk organisation members. Use the firm shell
-  (`app/(app)/...`). Roles: `owner`, `admin`, `member`. Scope: `all` or
-  `assigned_only`.
+- **Firm members** — plain Clerk users linked to a workspace via a
+  `memberships` row. Use the firm shell (`app/(app)/...`). Roles: `owner` or
+  `member`. Scope: `all` or `assigned_only`.
 - **Clients** — plain Clerk users linked via `customer_access`. Use the
   client portal (`app/portal/...`).
+- **Superadmins** — a third actor kind (`superadmins` table) that can
+  impersonate any workspace through the `/admin` console.
 
 ## Tech stack
 
@@ -58,7 +61,7 @@ Two user populations on one Clerk app:
 | Fonts | Inter Tight (sans + display) + JetBrains Mono |
 | UI primitives | shadcn (`new-york` style, `neutral` base) — `components/ui/*` |
 | Backend | Convex |
-| Auth | Clerk (`@clerk/nextjs`) with Organizations enabled |
+| Auth | Clerk (`@clerk/nextjs`) — plain users, **no Organizations** (membership lives in Convex) |
 | Icons | lucide-react |
 | Package mgr | **pnpm 11** (never yarn/npm) |
 
@@ -85,26 +88,33 @@ app/
   layout.tsx                                 ← root: fonts, providers
   globals.css
 
+  onboarding/create-workspace/page.tsx       ← /onboarding/create-workspace (first-run)
+
   (app)/                                     ← firm shell (route group, no URL)
     layout.tsx                               ← ⭐ single AppShell + breadcrumb logic
     customers/page.tsx                       ← /customers
     customers/[id]/page.tsx                  ← /customers/[id]
-    inbox/page.tsx                           ← /inbox
-    calendar/page.tsx                        ← /calendar
-    team/page.tsx                            ← /team
+    customers/[id]/tasks/page.tsx            ← + tasks/[taskId]/page.tsx (detail)
+    customers/[id]/documents/page.tsx
+    customers/[id]/chat/page.tsx
+    calendar/page.tsx                        ← /calendar (workspace overview)
+    activity/page.tsx                        ← /activity (client-thread feed)
     settings/page.tsx                        ← /settings
-    debug/page.tsx                           ← /debug — Phase 0 smoke tests
+    settings/team/page.tsx                   ← /settings/team
+    admin/page.tsx                           ← /admin (superadmin console)
+    debug/page.tsx                           ← /debug — smoke tests
 
   portal/                                    ← client portal (real folder, real URL prefix)
     layout.tsx                               ← portal shell
-    page.tsx                                 ← /portal
-    documents/, tasks/, messages/            ← /portal/*
+    page.tsx                                 ← /portal (customer picker / auto-redirect)
+    c/[customerId]/page.tsx                  ← /portal/c/[customerId]
+    c/[customerId]/{tasks,documents,messages}/  ← + tasks/[taskId]/page.tsx (detail)
 
-  sign-in/, sign-up/                         ← Clerk modals are used instead, but reserved
+  sign-in/, sign-up/                         ← Clerk catch-all routes
 ```
 
-**Per-customer task routes** will live under `app/(app)/customers/[id]/<feature>/...`
-once we wire them. Never create top-level task routes.
+**Per-customer task routes** live under `app/(app)/customers/[id]/<feature>/...`
+(tasks, documents, chat are wired). Never create top-level task routes.
 
 ## ⭐ The AppShell pattern (from v3)
 
@@ -118,14 +128,15 @@ Same rule for the portal: `PortalShell` lives only in `app/portal/layout.tsx`.
 ### Adding a new firm-shell route
 
 1. Create `app/(app)/<route>/page.tsx`. Return only the page content (no shell wrapper).
-2. If it needs a breadcrumb entry, add a `case` to `buildCrumbs` in `app/(app)/layout.tsx`.
+2. Wrap the body in `<PageShell>` and lead with `<PageHeader>` (both in
+   `components/layout/`) — don't hand-roll the `px-8 py-8` wrapper or the
+   `text-3xl` title.
 3. If it's a top-level nav target, add a `RailButton` in `components/layout/left-sidebar.tsx`.
 
 ### Adding a new per-customer task route
 
 1. Create `app/(app)/customers/[id]/<feature>/page.tsx`.
 2. Add a `RailButton` inside the `{inCustomerContext && (...)}` block in `left-sidebar.tsx`.
-3. The breadcrumb auto-handles segment 3 via `titleCase(segments[2])`.
 
 ### Adding a new module
 
@@ -138,28 +149,35 @@ Same rule for the portal: `PortalShell` lives only in `app/portal/layout.tsx`.
 ## Authorization
 
 Every Convex function that touches user data calls `getActor(ctx)` from
-`convex/lib/auth.ts`. It returns one of:
+`convex/lib/auth.ts`. It resolves the Clerk subject → `users` row, then returns
+one of three actor kinds (checked in this precedence order):
 
-- `{ kind: "member", workspaceId, role, scope, ... }`
-- `{ kind: "client", customerAccess: [...] }`
+- `{ kind: "superadmin", activeWorkspaceId?, sessionId?, effectiveRole: "owner" }`
+  — an active impersonation session wins over everything. Without a session, a
+  superadmin lands in "limbo" (no `activeWorkspaceId`) and must pick a workspace.
+- `{ kind: "member", workspaceId, membership, role, scope, ... }` — resolved
+  from the `memberships` table (`by_user` index), not Clerk Orgs.
+- `{ kind: "client", customerAccess: [...] }` — resolved from `customer_access`.
 
 `tryGetActor(ctx)` is the null-on-no-access variant. Use it when "not signed
 in" is an expected state (e.g. `whoAmI`). Otherwise use `getActor` and let
 it throw.
 
-Helper functions: `isMember`, `isClient`, `canManageTeam`, `canManageModules`,
+Helper functions: `isMember`, `isClient`, `isSuperadmin`, `canActInWorkspace`,
+`canManageTeam`, `canManageModules`, `canListAllWorkspaces`,
 `canSeeCustomer(ctx, actor, customerId)`.
 
 ## Convex schema
 
-18 core tables in `convex/schema.ts`:
+24 core tables in `convex/schema.ts`:
 
 - **Tenancy**: `workspaces`, `memberships`, `team_invites`, `users`
-- **Customer access**: `customers`, `customer_assignments`, `customer_access`
+- **Customer access**: `customers`, `customer_assignments`, `customer_access`, `client_invites`
 - **Work**: `documents`, `tasks`, `task_approvals`
 - **Communication**: `threads`, `thread_members`, `messages`
 - **Workflow**: `calendar_events`, `events`, `inbox_items`, `audit_log`
 - **Modules**: `module_settings`, `connectors`, `connector_imports`, `control_tower_sessions`
+- **Superadmin**: `superadmins`, `superadmin_sessions`
 
 Module substrates (accounting's `accounts` / `ledger_entries` / `vat_returns`,
 notary's `signature_requests`, etc.) live under `convex/modules/<id>/schema.ts`
@@ -186,30 +204,55 @@ Tailwind utilities auto-generated for every --color-* token:
 - **Status labels** use `<span className="pill pill--{kind}">…</span>`.
   Kinds: `draft` / `blocked` / `review` / `uploading` / `processing` /
   `completed` / `filed` / `balanced` / `neutral` / `failed`.
+- **Page scaffolding** — wrap pages in `<PageShell>` and lead with
+  `<PageHeader>` (`components/layout/`). Don't re-implement the `px-8 py-8`
+  wrapper or the `text-3xl font-semibold tracking-tight` title; the header's
+  `eyebrow` / `backHref` / `count` / `badge` / `meta` / `actions` slots cover
+  the common shapes. (No breadcrumbs — dropped in Phase 2.0.)
+- **Shared utilities** — date/size/initials formatting lives in
+  `lib/formatters.ts`; loading/empty placeholders use `<LoadingState>` /
+  `<EmptyState>` from `components/states.tsx`. Don't copy-paste local copies.
 - **Eyebrows** (`<div className="eyebrow">…</div>`) are for *context* (e.g.
-  "Customer" above a customer's name), not for restating the page title.
-  Plain placeholder pages just use an `h1`.
-- **Breadcrumbs** are derived in `app/(app)/layout.tsx`, never passed by pages.
+  "Workspace" above "Calendar"), not for restating the page title.
 - **The AI assistant is called "Control Tower"** (product term).
 - **Currency is MUR by default;** copy assumes Mauritian context.
 - **No `filter()` in Convex queries** — define indexes and use `withIndex`.
 
-## Phase 0 status
+## Project status — Phase 2.0
 
-This codebase is the Phase 0 scaffold. Working:
+The scaffold is long behind us; core CRUD is built end-to-end (firm shell +
+client portal, with real Convex queries/mutations throughout).
 
-- Next.js + Convex + Clerk + Tailwind v4 + shadcn project
-- Convex schema for all 18 core tables
-- Clerk auth + Convex JWT integration (issuer `https://known-squid-86.clerk.accounts.dev`)
-- `getActor` and `whoAmI` end-to-end
-- Firm shell (`app/(app)/...`) and client portal shell (`app/portal/...`)
-- Module registry with the built-in `core` module
-- Initials avatar + UserMenu dropdown
-- `pnpm dev` runs both servers concurrently
+**Built (Phase 1.0 → 2.0):**
 
-Phase 1 builds the real CRUD: workspace creation, invitations, customer
-management, document upload/storage, tasks, threads/chat, calendar UI,
-inbox aggregation. See `docs/architecture.html` § Roadmap.
+- Workspace onboarding + Clerk JWT integration (issuer
+  `https://known-squid-86.clerk.accounts.dev`); `getActor` / `whoAmI`.
+- Superadmin foundation: `superadmins` table, impersonation sessions, banner,
+  `/admin` console.
+- Customers — CRUD with inline-edit + archive (`convex/customers.ts`).
+- Documents — upload via Convex File Storage, tags, visibility, archive
+  (`convex/documents.ts`).
+- Tasks — CRUD, status transitions, client visibility, generic detail page with
+  per-type renderer dispatch (`convex/tasks.ts`).
+- Threads + messages — per-customer internal + shared client threads, task
+  `#chips`, system cards (`convex/threads.ts`, `convex/messages.ts`).
+- Calendar — per-customer (task due-dates surface as events) plus a
+  workspace-wide overview (`convex/calendar.ts`).
+- Team — members, roles, magic-link invites via `convex/team.ts` +
+  `convex/clerkInvites.ts`; managed at `/settings/team`.
+- Client portal — customer picker, dashboard, tasks, documents, messages.
+- Dropped Clerk Organizations; membership now lives in the `memberships` table.
+
+**Not built yet (later phases):**
+
+- **Control Tower** (the AI assistant) — only the `control_tower_sessions`
+  table exists; no queries/mutations/UI.
+- **Industry modules** (accounting, notary) — commented out in
+  `modules/registry.ts`; only `core` is registered. Module substrate schemas
+  under `convex/modules/<id>/` don't exist yet.
+- **Prerequisite engine** and **connectors** — schema tables only, no logic.
+
+See `docs/architecture.html` § Roadmap for what's next.
 
 ## Known issues / gotchas
 

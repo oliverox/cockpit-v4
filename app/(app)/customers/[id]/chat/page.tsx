@@ -19,6 +19,7 @@ import {
   type ChatSelection,
 } from "@/components/chat/chat-context-panel";
 import { cn } from "@/lib/utils";
+import { LoadingState } from "@/components/states";
 
 export default function CustomerChatPage() {
   const params = useParams<{ id: string }>();
@@ -38,11 +39,7 @@ export default function CustomerChatPage() {
   }, [customerId, ensureThread]);
 
   if (!threadId) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-ink-3">
-        Loading…
-      </div>
-    );
+    return <LoadingState centered />;
   }
 
   return <ChatSurface threadId={threadId} customerId={customerId} />;
@@ -85,9 +82,7 @@ function ChatSurface({
         />
 
         <div ref={scrollerRef} className="flex-1 overflow-y-auto px-8 py-6">
-          {filtered === undefined && (
-            <div className="text-sm text-ink-3">Loading…</div>
-          )}
+          {filtered === undefined && <LoadingState />}
           {filtered !== undefined && filtered.length === 0 && (
             <div className="text-sm text-ink-3">
               {taskFilter

@@ -7,6 +7,7 @@ import { ArrowRight, Shield } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
+import { LoadingState } from "@/components/states";
 
 /**
  * Superadmin console — lists every workspace in the system and lets the
@@ -37,7 +38,7 @@ export default function AdminWorkspacesPage() {
   }
 
   if (workspaces === undefined) {
-    return <div className="p-8 text-sm text-ink-3">Loading…</div>;
+    return <LoadingState className="p-8" />;
   }
 
   if (workspaces === null) {

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
+import { formatDate } from "@/lib/formatters";
 import { statusDisplay, typeDisplay } from "@/lib/task-display";
 import { TaskAttachments } from "@/components/tasks/task-attachments";
 import { cn } from "@/lib/utils";
@@ -289,12 +290,4 @@ function PanelHeader({
       </div>
     </header>
   );
-}
-
-function formatDate(ts: number): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(ts));
 }

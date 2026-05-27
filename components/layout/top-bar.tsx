@@ -1,65 +1,36 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight } from "lucide-react";
 import { useQuery } from "convex/react";
 import { UserMenu } from "./user-menu";
-import { Fragment } from "react";
 import { api } from "@/convex/_generated/api";
 
-export type Crumb = {
-  label: string;
-  href?: string;
-};
-
-type TopBarProps = {
-  crumbs: Crumb[];
-};
-
-export function TopBar({ crumbs }: TopBarProps) {
+export function TopBar() {
   const workspace = useQuery(api.workspaces.getActive);
+  const name = workspace?.name ?? "Cockpit";
 
   return (
-    <header className="flex h-14 items-center gap-4 border-b border-line bg-card px-6">
-      {/* Workspace name (falls back to "Cockpit" while loading or pre-onboarding) */}
+    <header className="relative flex h-14 items-center border-b border-line bg-card px-6">
+      {/* Firm nameplate — a centered mono pressmark that doubles as the home
+          link. The yellow lozenge echoes the brand accent on the rail; it
+          pivots a quarter-turn on hover for a quiet bit of life. */}
       <Link
         href="/customers"
-        className="text-sm font-semibold tracking-tight text-fmu-navy"
         prefetch={false}
+        aria-label={`${name} — home`}
+        title="Home"
+        className="group absolute left-1/2 top-1/2 flex max-w-[44%] -translate-x-1/2 -translate-y-1/2 items-center gap-2.5 rounded-md px-3 py-1.5 transition-colors hover:bg-card-tint"
       >
-        {workspace?.name ?? "Cockpit"}
+        <span
+          aria-hidden
+          className="h-1.5 w-1.5 rotate-45 bg-fmu-yellow transition-transform duration-300 ease-out group-hover:rotate-[135deg] motion-reduce:transition-none"
+        />
+        <span className="truncate font-mono text-[12px] font-medium uppercase tracking-[0.2em] text-ink transition-colors group-hover:text-fmu-navy">
+          {name}
+        </span>
       </Link>
 
-      <span className="text-ink-4">/</span>
-
-      {/* Breadcrumbs */}
-      <nav className="flex items-center gap-1.5 text-sm">
-        {crumbs.length === 0 && (
-          <span className="text-ink-3">—</span>
-        )}
-        {crumbs.map((c, i) => (
-          <Fragment key={i}>
-            {i > 0 && (
-              <ChevronRight className="h-3.5 w-3.5 text-ink-4" aria-hidden />
-            )}
-            {c.href ? (
-              <Link
-                href={c.href}
-                className="text-ink-2 hover:text-ink"
-                prefetch={false}
-              >
-                {c.label}
-              </Link>
-            ) : (
-              <span className="text-ink">{c.label}</span>
-            )}
-          </Fragment>
-        ))}
-      </nav>
-
       <div className="flex-1" />
-
-      {/* User menu */}
       <UserMenu />
     </header>
   );

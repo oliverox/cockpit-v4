@@ -5,6 +5,9 @@ import { useQuery } from "convex/react";
 import { ArrowRight, MessageCircle } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { InitialsAvatar } from "@/components/layout/user-menu";
+import { EmptyState, LoadingState } from "@/components/states";
+import { PageShell } from "@/components/layout/page-shell";
+import { PageHeader } from "@/components/layout/page-header";
 
 /**
  * Cross-customer client conversations.
@@ -17,28 +20,19 @@ export default function ActivityPage() {
   const rows = useQuery(api.messages.listRecentSharedAcrossWorkspace, {});
 
   return (
-    <div className="w-full px-8 py-8">
-      <header className="mb-6">
-        <div className="eyebrow">Workspace</div>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink">
-          Client conversations
-        </h1>
-        <p className="mt-2 text-sm text-ink-3">
-          Recent activity across the shared threads with your clients.
-        </p>
-      </header>
+    <PageShell>
+      <PageHeader
+        eyebrow="Workspace"
+        title="Client conversations"
+        description="Recent activity across the shared threads with your clients."
+      />
 
-      {rows === undefined && (
-        <div className="text-sm text-ink-3">Loading…</div>
-      )}
+      {rows === undefined && <LoadingState />}
       {rows !== undefined && rows.length === 0 && (
-        <div className="rounded-lg border border-dashed border-line bg-card-tint/40 px-6 py-10 text-center">
-          <MessageCircle className="mx-auto mb-3 h-6 w-6 text-ink-4" />
-          <p className="text-sm text-ink-3">
-            No client conversations yet. They'll appear here once you or a
-            client posts in a shared thread.
-          </p>
-        </div>
+        <EmptyState icon={MessageCircle}>
+          No client conversations yet. They'll appear here once you or a
+          client posts in a shared thread.
+        </EmptyState>
       )}
       {rows !== undefined && rows.length > 0 && (
         <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line bg-card">
@@ -49,7 +43,7 @@ export default function ActivityPage() {
           ))}
         </ul>
       )}
-    </div>
+    </PageShell>
   );
 }
 

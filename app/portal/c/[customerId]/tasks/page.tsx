@@ -7,10 +7,14 @@ import { useQuery } from "convex/react";
 import { CalendarDays, ListChecks, Plus } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
+import { formatDue } from "@/lib/formatters";
 import { statusDisplay, typeDisplay } from "@/lib/task-display";
 import { Button } from "@/components/ui/button";
 import { PortalNewTaskDialog } from "@/components/tasks/portal-new-task-dialog";
 import { cn } from "@/lib/utils";
+import { EmptyState, LoadingState } from "@/components/states";
+import { PageShell } from "@/components/layout/page-shell";
+import { PageHeader } from "@/components/layout/page-header";
 
 const OPEN_STATUSES = new Set([
   "draft",
@@ -30,36 +34,27 @@ export default function PortalCustomerTasksPage() {
   const total = tasks?.length ?? 0;
 
   return (
-    <div className="w-full px-8 py-8">
-      <header className="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <div className="eyebrow">Tasks</div>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink">
-            What's on
-          </h1>
-          <p className="mt-2 text-sm text-ink-3">
-            Things assigned to you, and things being waited on from you.
-          </p>
-        </div>
-        <Button onClick={() => setNewOpen(true)}>
-          <Plus className="h-3.5 w-3.5" />
-          New task
-        </Button>
-      </header>
+    <PageShell>
+      <PageHeader
+        eyebrow="Tasks"
+        title="What's on"
+        description="Things assigned to you, and things being waited on from you."
+        actions={
+          <Button onClick={() => setNewOpen(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            New task
+          </Button>
+        }
+      />
       <PortalNewTaskDialog
         open={newOpen}
         onOpenChange={setNewOpen}
         customerId={customerId}
       />
 
-      {tasks === undefined && (
-        <div className="text-sm text-ink-3">Loading…</div>
-      )}
+      {tasks === undefined && <LoadingState />}
       {tasks !== undefined && total === 0 && (
-        <div className="rounded-lg border border-dashed border-line bg-card-tint/40 px-6 py-8 text-center">
-          <ListChecks className="mx-auto mb-3 h-6 w-6 text-ink-4" />
-          <p className="text-sm text-ink-3">Nothing assigned yet.</p>
-        </div>
+        <EmptyState icon={ListChecks}>Nothing assigned yet.</EmptyState>
       )}
       {tasks !== undefined && total > 0 && (
         <div className="space-y-6">
@@ -79,7 +74,7 @@ export default function PortalCustomerTasksPage() {
           )}
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }
 
@@ -182,19 +177,4 @@ function TaskRow({
       <span className={`pill pill--${pill} shrink-0`}>{label}</span>
     </Link>
   );
-}
-
-function formatDue(ts: number): string {
-  const now = Date.now();
-  const day = 24 * 60 * 60 * 1000;
-  const days = Math.round((ts - now) / day);
-  if (days === 0) return "today";
-  if (days === 1) return "tomorrow";
-  if (days === -1) return "yesterday";
-  if (days > 0 && days < 7) return `in ${days}d`;
-  if (days < 0 && days > -30) return `${-days}d ago`;
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-  }).format(new Date(ts));
 }

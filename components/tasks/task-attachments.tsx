@@ -6,6 +6,7 @@ import { FileText, Upload, X } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
+import { formatBytes } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -193,10 +194,4 @@ function FileLink({ document }: { document: Doc<"documents"> }) {
       {document.fileName}
     </a>
   );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }

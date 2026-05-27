@@ -5,6 +5,10 @@ import { useQuery } from "convex/react";
 import { FileText, FolderOpen } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
+import { formatBytes, formatDate } from "@/lib/formatters";
+import { EmptyState, LoadingState } from "@/components/states";
+import { PageShell } from "@/components/layout/page-shell";
+import { PageHeader } from "@/components/layout/page-header";
 
 export default function PortalCustomerDocumentsPage() {
   const params = useParams<{ customerId: string }>();
@@ -12,22 +16,12 @@ export default function PortalCustomerDocumentsPage() {
   const docs = useQuery(api.documents.listByCustomer, { customerId });
 
   return (
-    <div className="w-full px-8 py-8">
-      <header className="mb-6">
-        <div className="eyebrow">Documents</div>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink">
-          Files shared with you
-        </h1>
-      </header>
+    <PageShell>
+      <PageHeader eyebrow="Documents" title="Files shared with you" />
 
-      {docs === undefined && (
-        <div className="text-sm text-ink-3">Loading…</div>
-      )}
+      {docs === undefined && <LoadingState />}
       {docs !== undefined && docs.length === 0 && (
-        <div className="rounded-lg border border-dashed border-line bg-card-tint/40 px-6 py-8 text-center">
-          <FolderOpen className="mx-auto mb-3 h-6 w-6 text-ink-4" />
-          <p className="text-sm text-ink-3">No files shared yet.</p>
-        </div>
+        <EmptyState icon={FolderOpen}>No files shared yet.</EmptyState>
       )}
       {docs !== undefined && docs.length > 0 && (
         <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-card">
@@ -38,7 +32,7 @@ export default function PortalCustomerDocumentsPage() {
           ))}
         </ul>
       )}
-    </div>
+    </PageShell>
   );
 }
 
@@ -69,18 +63,4 @@ function DocumentRow({ doc }: { doc: Doc<"documents"> }) {
       </span>
     </a>
   );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatDate(ts: number): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(ts));
 }

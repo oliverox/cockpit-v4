@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { ChevronRight, Users } from "lucide-react";
+import { PageShell } from "@/components/layout/page-shell";
+import { PageHeader } from "@/components/layout/page-header";
 
 const sections = [
   {
@@ -12,10 +14,8 @@ const sections = [
 
 export default function SettingsPage() {
   return (
-    <div className="mx-auto max-w-3xl space-y-6 px-8 py-10">
-      <h1 className="text-3xl font-semibold tracking-tight text-ink">
-        Settings
-      </h1>
+    <PageShell size="3xl" className="space-y-6">
+      <PageHeader title="Settings" className="mb-0" />
       <nav className="overflow-hidden rounded-lg border border-line bg-card">
         <ul className="divide-y divide-line">
           {sections.map((s) => {
@@ -41,6 +41,6 @@ export default function SettingsPage() {
           })}
         </ul>
       </nav>
-    </div>
+    </PageShell>
   );
 }

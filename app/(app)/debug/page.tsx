@@ -4,11 +4,12 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getAllModules } from "@/modules/registry";
+import { LoadingState } from "@/components/states";
 
 function WhoAmIPanel() {
   const whoAmI = useQuery(api.users.whoAmI);
 
-  if (whoAmI === undefined) return <div className="text-sm text-ink-3">Loading…</div>;
+  if (whoAmI === undefined) return <LoadingState />;
   if (whoAmI === null) return <div className="text-sm text-ink-3">Not signed in.</div>;
 
   if (!whoAmI.provisioned) {

@@ -60,6 +60,14 @@ export type TaskTypeDef = {
   fullWidth?: boolean;
   /** Optional default `clientVisible` for newly-created tasks of this type. */
   defaultClientVisible?: boolean;
+  /**
+   * When true, the task cannot advance out of `draft` into a review/approval
+   * state until at least one (non-archived) document is attached. Enforced
+   * server-side in `tasks.setStatus`; the renderer also disables the advance
+   * actions. Use for document_request-style tasks whose whole point is an
+   * artifact (e.g. a requested passport scan).
+   */
+  requiresAttachment?: boolean;
 };
 
 // ---- Message cards -----------------------------------------------------

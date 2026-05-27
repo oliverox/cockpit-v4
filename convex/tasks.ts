@@ -10,6 +10,7 @@ import {
   tryGetActor,
 } from "./lib/auth";
 import { getOrCreateClientSharedThread } from "./threads";
+import { getTaskTypeDef } from "../modules/registry";
 
 /**
  * Tasks — the generic envelope every module's work fits into.
@@ -271,6 +272,10 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   processing: ["review", "cancelled"],
 };
 
+/** Statuses that assert a task is fulfilled/under review — i.e. an artifact
+ * should exist by now. Used by the `requiresAttachment` guardrail. */
+const ARTIFACT_REQUIRED_STATUSES = new Set(["review", "firm_approved", "filed"]);
+
 export const setStatus = mutation({
   args: {
     taskId: v.id("tasks"),
@@ -292,6 +297,27 @@ export const setStatus = mutation({
       throw new Error(
         `Cannot transition task from ${task.status} to ${args.status}`,
       );
+    }
+
+    // Attachment guardrail: types flagged `requiresAttachment` (e.g.
+    // core.document_request) can't be sent for review or approved until at
+    // least one non-archived document is attached. Reopening an already
+    // approved task (firm_approved → review) is exempt — the artifact existed
+    // when it was approved, and reopening shouldn't be blockable.
+    if (
+      getTaskTypeDef(task.type)?.requiresAttachment &&
+      ARTIFACT_REQUIRED_STATUSES.has(args.status) &&
+      task.status !== "firm_approved"
+    ) {
+      const attached = await ctx.db
+        .query("documents")
+        .withIndex("by_task", (q) => q.eq("taskId", task._id))
+        .take(50);
+      if (!attached.some((d) => !d.archived)) {
+        throw new Error(
+          "Attach at least one document before sending this request for review or approval.",
+        );
+      }
     }
 
     // Reopening (firm_approved → review) requires firm owner

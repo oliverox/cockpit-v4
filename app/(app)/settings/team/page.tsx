@@ -9,6 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { InitialsAvatar } from "@/components/layout/user-menu";
 import { cn } from "@/lib/utils";
+import { LoadingState } from "@/components/states";
+import { PageShell } from "@/components/layout/page-shell";
+import { PageHeader } from "@/components/layout/page-header";
 
 export default function TeamSettingsPage() {
   const members = useQuery(api.team.listMembers, {});
@@ -53,17 +56,13 @@ export default function TeamSettingsPage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-7 px-8 py-10">
-      <header>
-        <div className="eyebrow">Settings</div>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink">
-          Team
-        </h1>
-        <p className="mt-2 text-sm text-ink-3">
-          Everyone with access to this firm. Invite by email — they'll get a
-          magic-link to set up their account.
-        </p>
-      </header>
+    <PageShell size="3xl" className="space-y-7">
+      <PageHeader
+        eyebrow="Settings"
+        title="Team"
+        description="Everyone with access to this firm. Invite by email — they'll get a magic-link to set up their account."
+        className="mb-0"
+      />
 
       <form onSubmit={onInvite} className="flex items-center gap-2">
         <Input
@@ -245,7 +244,7 @@ export default function TeamSettingsPage() {
           </ul>
         </Section>
       )}
-    </div>
+    </PageShell>
   );
 }
 
@@ -277,7 +276,7 @@ function Th({ children }: { children: React.ReactNode }) {
 }
 
 function Loading() {
-  return <p className="text-sm text-ink-3">Loading…</p>;
+  return <LoadingState />;
 }
 
 function Empty({ children }: { children: React.ReactNode }) {

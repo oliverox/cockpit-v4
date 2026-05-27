@@ -6,6 +6,9 @@ import { useRouter } from "next/navigation";
 import { useQuery } from "convex/react";
 import { ArrowRight, Building2 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
+import { EmptyState, LoadingState } from "@/components/states";
+import { PageShell } from "@/components/layout/page-shell";
+import { PageHeader } from "@/components/layout/page-header";
 
 /**
  * Portal home — customer picker.
@@ -27,32 +30,21 @@ export default function PortalHomePage() {
   // While the query is in flight, or while we're auto-redirecting a
   // single-customer client, show a quiet loader instead of flashing the picker.
   if (customers === undefined || customers.length === 1) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-ink-3">
-        Loading…
-      </div>
-    );
+    return <LoadingState centered />;
   }
 
   return (
-    <div className="w-full px-8 py-8">
-      <header className="mb-8">
-        <div className="eyebrow">Portal</div>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink">
-          Choose a company
-        </h1>
-        <p className="mt-2 text-sm text-ink-3">
-          Pick the company whose tasks and documents you want to view.
-        </p>
-      </header>
+    <PageShell>
+      <PageHeader
+        eyebrow="Portal"
+        title="Choose a company"
+        description="Pick the company whose tasks and documents you want to view."
+      />
 
       {customers.length === 0 && (
-        <div className="rounded-lg border border-dashed border-line bg-card-tint/40 px-6 py-8 text-center">
-          <Building2 className="mx-auto mb-3 h-6 w-6 text-ink-4" />
-          <p className="text-sm text-ink-3">
-            No companies yet. You'll see them here once you've been invited.
-          </p>
-        </div>
+        <EmptyState icon={Building2}>
+          No companies yet. You'll see them here once you've been invited.
+        </EmptyState>
       )}
       {customers.length > 0 && (
         <ul className="divide-y divide-line overflow-hidden rounded-lg border border-line bg-card">
@@ -80,6 +72,6 @@ export default function PortalHomePage() {
           ))}
         </ul>
       )}
-    </div>
+    </PageShell>
   );
 }

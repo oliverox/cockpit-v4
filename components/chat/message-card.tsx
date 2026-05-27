@@ -5,6 +5,7 @@ import { useQuery } from "convex/react";
 import { CalendarDays, FileText, ListChecks, Upload } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { formatBytes, formatDate } from "@/lib/formatters";
 import { typeDisplay } from "@/lib/task-display";
 
 export type CardSurface = "firm" | "portal";
@@ -76,7 +77,7 @@ export function MessageCard({
         {p.dueDate && (
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-ink-3">
             <CalendarDays className="h-3 w-3" />
-            <span className="num">Due {formatDue(p.dueDate)}</span>
+            <span className="num">Due {formatDate(p.dueDate)}</span>
           </div>
         )}
       </>
@@ -210,16 +211,3 @@ function DocumentUploadedCard({
   );
 }
 
-function formatDue(ts: number): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(ts));
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}

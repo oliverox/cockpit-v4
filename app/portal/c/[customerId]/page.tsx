@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Doc, Id } from "@/convex/_generated/dataModel";
+import { formatBytes, formatDate, formatDue } from "@/lib/formatters";
 import { statusDisplay, typeDisplay } from "@/lib/task-display";
 import { Button } from "@/components/ui/button";
 import { PortalNewTaskDialog } from "@/components/tasks/portal-new-task-dialog";
@@ -22,6 +23,9 @@ import {
   useCalendarMode,
 } from "@/components/calendar/calendar-view";
 import { cn } from "@/lib/utils";
+import { LoadingState } from "@/components/states";
+import { PageShell } from "@/components/layout/page-shell";
+import { PageHeader } from "@/components/layout/page-header";
 
 const OPEN_STATUSES = new Set([
   "draft",
@@ -64,19 +68,18 @@ export default function PortalCustomerHome() {
   );
 
   return (
-    <div className="w-full space-y-6 px-8 py-8">
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <div className="eyebrow">Welcome</div>
-          <h1 className="mt-1 text-3xl font-semibold tracking-tight text-ink">
-            {customer?.name ?? "…"}
-          </h1>
-        </div>
-        <Button onClick={() => setNewOpen(true)}>
-          <Plus className="h-3.5 w-3.5" />
-          New task
-        </Button>
-      </header>
+    <PageShell className="space-y-6">
+      <PageHeader
+        eyebrow="Welcome"
+        title={customer?.name ?? "…"}
+        className="mb-0"
+        actions={
+          <Button onClick={() => setNewOpen(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            New task
+          </Button>
+        }
+      />
       <PortalNewTaskDialog
         open={newOpen}
         onOpenChange={setNewOpen}
@@ -140,7 +143,7 @@ export default function PortalCustomerHome() {
           </Panel>
         </div>
       </div>
-    </div>
+    </PageShell>
   );
 }
 
@@ -181,7 +184,7 @@ function Panel({
 }
 
 function Loading() {
-  return <div className="px-4 py-4 text-sm text-ink-3">Loading…</div>;
+  return <LoadingState className="px-4 py-4" />;
 }
 
 // ── Pieces ─────────────────────────────────────────────────────────────
@@ -281,33 +284,3 @@ function DocRow({ doc }: { doc: Doc<"documents"> }) {
   );
 }
 
-// ── Formatters ─────────────────────────────────────────────────────────
-
-function formatDue(ts: number): string {
-  const now = Date.now();
-  const day = 24 * 60 * 60 * 1000;
-  const days = Math.round((ts - now) / day);
-  if (days === 0) return "today";
-  if (days === 1) return "tomorrow";
-  if (days === -1) return "yesterday";
-  if (days > 0 && days < 7) return `in ${days}d`;
-  if (days < 0 && days > -30) return `${-days}d ago`;
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-  }).format(new Date(ts));
-}
-
-function formatDate(ts: number): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(ts));
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}

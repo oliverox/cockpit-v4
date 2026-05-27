@@ -7,6 +7,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { GenericTaskRenderer } from "@/components/tasks/generic-task-renderer";
 import { TaskChatEmbed } from "@/components/chat/task-chat-embed";
 import { getTaskTypeDef } from "@/modules/registry";
+import { LoadingState } from "@/components/states";
 
 /**
  * Task detail page.
@@ -28,11 +29,7 @@ export default function CustomerTaskDetailPage() {
   const task = useQuery(api.tasks.get, { taskId });
 
   if (task === undefined) {
-    return (
-      <div className="w-full px-8 py-8 text-sm text-ink-3">
-        Loading…
-      </div>
-    );
+    return <LoadingState className="w-full px-8 py-8" />;
   }
 
   if (task === null) {

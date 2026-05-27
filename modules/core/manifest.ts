@@ -23,6 +23,7 @@ export const coreManifest: ModuleManifest = {
     "core.document_request": {
       label: "Document request",
       defaultClientVisible: true,
+      requiresAttachment: true,
     },
     "core.review": {
       label: "Review",

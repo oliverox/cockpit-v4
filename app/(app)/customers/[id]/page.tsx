@@ -39,6 +39,9 @@ import {
   useCalendarMode,
 } from "@/components/calendar/calendar-view";
 import { TaskPanel } from "@/components/calendar/task-panel";
+import { LoadingState } from "@/components/states";
+import { PageShell } from "@/components/layout/page-shell";
+import { PageHeader } from "@/components/layout/page-header";
 
 export default function CustomerHomePage() {
   const params = useParams<{ id: string }>();
@@ -46,11 +49,7 @@ export default function CustomerHomePage() {
   const customer = useQuery(api.customers.get, { customerId });
 
   if (customer === undefined) {
-    return (
-      <div className="w-full px-8 py-8 text-sm text-ink-3">
-        Loading…
-      </div>
-    );
+    return <LoadingState className="w-full px-8 py-8" />;
   }
   if (customer === null) {
     return (
@@ -83,15 +82,77 @@ function CustomerHome({ customer }: { customer: Doc<"customers"> }) {
     days: 120,
   });
 
+  const archived = customer.archived === true;
+  const metaChips = buildMetaChips(customer.metadata);
+
   return (
-    <div className="w-full px-8 py-8">
-      <Header
-        customer={customer}
-        archived={customer.archived === true}
-        onEdit={() => setEditOpen(true)}
-        onManageAccess={() => setAccessOpen(true)}
-        onArchive={() => setArchiveOpen(true)}
-        onUnarchive={() => void unarchiveCustomer({ customerId })}
+    <PageShell>
+      <PageHeader
+        title={customer.name}
+        backHref="/customers"
+        backLabel="All customers"
+        badge={
+          archived ? (
+            <span className="pill pill--neutral">Archived</span>
+          ) : undefined
+        }
+        meta={
+          metaChips.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-3">
+              {metaChips.map((c, i) => (
+                <span key={c.label} className="flex items-center gap-1.5">
+                  {i > 0 && <span className="text-ink-4">·</span>}
+                  <span className="eyebrow" style={{ letterSpacing: "0.08em" }}>
+                    {c.label}
+                  </span>
+                  <span className={c.mono ? "num" : ""}>{c.value}</span>
+                </span>
+              ))}
+            </div>
+          ) : undefined
+        }
+        actions={
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" aria-label="Customer actions">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem
+                onSelect={() => setEditOpen(true)}
+                disabled={archived}
+              >
+                <Pencil className="h-4 w-4" />
+                Edit details
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={() => setAccessOpen(true)}
+                disabled={archived}
+              >
+                <UserPlus className="h-4 w-4" />
+                Client access
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {archived ? (
+                <DropdownMenuItem
+                  onSelect={() => void unarchiveCustomer({ customerId })}
+                >
+                  <ArchiveRestore className="h-4 w-4" />
+                  Unarchive
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem
+                  onSelect={() => setArchiveOpen(true)}
+                  className="text-fmu-red focus:text-fmu-red"
+                >
+                  <Archive className="h-4 w-4" />
+                  Archive
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        }
       />
 
       <div className="grid h-[calc(100vh-12rem)] min-h-[640px] gap-6 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_420px]">
@@ -167,86 +228,7 @@ function CustomerHome({ customer }: { customer: Doc<"customers"> }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
-  );
-}
-
-// ── Header ─────────────────────────────────────────────────────────────
-
-function Header({
-  customer,
-  archived,
-  onEdit,
-  onManageAccess,
-  onArchive,
-  onUnarchive,
-}: {
-  customer: Doc<"customers">;
-  archived: boolean;
-  onEdit: () => void;
-  onManageAccess: () => void;
-  onArchive: () => void;
-  onUnarchive: () => void;
-}) {
-  const metaChips = buildMetaChips(customer.metadata);
-
-  return (
-    <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
-      <div className="min-w-0 flex-1">
-        <div className="mb-2 flex items-center gap-2">
-          <span className="eyebrow">Customer</span>
-          {archived && <span className="pill pill--neutral">Archived</span>}
-        </div>
-        <h1 className="truncate text-3xl font-semibold tracking-tight text-ink">
-          {customer.name}
-        </h1>
-        {metaChips.length > 0 && (
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-3">
-            {metaChips.map((c, i) => (
-              <span key={c.label} className="flex items-center gap-1.5">
-                {i > 0 && <span className="text-ink-4">·</span>}
-                <span className="eyebrow" style={{ letterSpacing: "0.08em" }}>
-                  {c.label}
-                </span>
-                <span className={c.mono ? "num" : ""}>{c.value}</span>
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="icon" aria-label="Customer actions">
-            <MoreHorizontal className="h-4 w-4" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-48">
-          <DropdownMenuItem onSelect={onEdit} disabled={archived}>
-            <Pencil className="h-4 w-4" />
-            Edit details
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={onManageAccess} disabled={archived}>
-            <UserPlus className="h-4 w-4" />
-            Client access
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          {archived ? (
-            <DropdownMenuItem onSelect={onUnarchive}>
-              <ArchiveRestore className="h-4 w-4" />
-              Unarchive
-            </DropdownMenuItem>
-          ) : (
-            <DropdownMenuItem
-              onSelect={onArchive}
-              className="text-fmu-red focus:text-fmu-red"
-            >
-              <Archive className="h-4 w-4" />
-              Archive
-            </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </header>
+    </PageShell>
   );
 }
 

@@ -7,6 +7,7 @@ import { ListChecks, Plus } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
+import { formatDue } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
 
 type Row = {
@@ -215,17 +216,3 @@ function prettyTaskType(type: string): string {
     .join(" ");
 }
 
-function formatDue(ts: number): string {
-  const now = Date.now();
-  const day = 24 * 60 * 60 * 1000;
-  const diff = ts - now;
-  const absDays = Math.round(diff / day);
-  if (absDays === 0) return "today";
-  if (absDays === 1) return "tomorrow";
-  if (absDays === -1) return "yesterday";
-  if (absDays > 0 && absDays < 7) return `in ${absDays}d`;
-  if (absDays < 0 && absDays > -30) return `${-absDays}d ago`;
-  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short" }).format(
-    new Date(ts),
-  );
-}

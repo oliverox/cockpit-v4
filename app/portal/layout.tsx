@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useConvexAuth } from "convex/react";
 import { PortalShell } from "@/components/layout/portal-shell";
+import { LoadingState } from "@/components/states";
 import { useEnsureUser } from "@/hooks/use-ensure-user";
 
 /**
@@ -31,11 +32,7 @@ export default function PortalLayout({
   }, [isLoading, isAuthenticated, router]);
 
   if (isLoading) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-background text-sm text-ink-3">
-        Loading…
-      </div>
-    );
+    return <LoadingState centered className="h-screen bg-background" />;
   }
 
   if (!isAuthenticated) {

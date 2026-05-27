@@ -24,7 +24,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { TagEditor } from "@/components/documents/tag-editor";
+import { formatBytes, formatDate } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
+import { LoadingState } from "@/components/states";
+import { PageShell } from "@/components/layout/page-shell";
+import { PageHeader } from "@/components/layout/page-header";
 
 export default function CustomerDocumentsPage() {
   const params = useParams<{ id: string }>();
@@ -80,26 +84,27 @@ export default function CustomerDocumentsPage() {
   }
 
   return (
-    <div className="w-full space-y-6 px-8 py-8">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-semibold tracking-tight text-ink">
-          Documents
-        </h1>
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          className="sr-only"
-          onChange={(e) => {
-            void onFilesPicked(e.target.files);
-            e.target.value = "";
-          }}
-        />
-        <Button onClick={() => inputRef.current?.click()}>
-          <UploadIcon className="h-4 w-4" />
-          Upload
-        </Button>
-      </div>
+    <PageShell className="space-y-6">
+      <PageHeader
+        title="Documents"
+        className="mb-0"
+        actions={
+          <Button onClick={() => inputRef.current?.click()}>
+            <UploadIcon className="h-4 w-4" />
+            Upload
+          </Button>
+        }
+      />
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        className="sr-only"
+        onChange={(e) => {
+          void onFilesPicked(e.target.files);
+          e.target.value = "";
+        }}
+      />
 
       {uploadingCount > 0 && (
         <div className="flex items-center gap-2 rounded-md border border-line bg-card-tint px-3 py-2 text-sm text-ink-2">
@@ -117,9 +122,7 @@ export default function CustomerDocumentsPage() {
         </div>
       )}
 
-      {documents === undefined && (
-        <p className="text-sm text-ink-3">Loading…</p>
-      )}
+      {documents === undefined && <LoadingState />}
 
       {documents !== undefined && documents.length === 0 && uploadingCount === 0 && (
         <p className="text-sm text-ink-3">No documents yet.</p>
@@ -157,7 +160,7 @@ export default function CustomerDocumentsPage() {
           </table>
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }
 
@@ -302,20 +305,3 @@ function VisibilityPill({
   );
 }
 
-// ---- formatters ----------------------------------------------------------
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  if (n < 1024 * 1024 * 1024)
-    return `${(n / 1024 / 1024).toFixed(1)} MB`;
-  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
-}
-
-function formatDate(ts: number): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(ts));
-}

@@ -23,7 +23,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { formatDate } from "@/lib/formatters";
 import { statusDisplay, typeDisplay } from "@/lib/task-display";
+import { getTaskTypeDef } from "@/modules/registry";
 import { TaskAttachments } from "@/components/tasks/task-attachments";
 import { cn } from "@/lib/utils";
 
@@ -48,10 +50,21 @@ export function GenericTaskRenderer({ task, customerId }: Props) {
   const updateTask = useMutation(api.tasks.update);
   const setStatus = useMutation(api.tasks.setStatus);
   const archive = useMutation(api.tasks.archive);
+  const attachments = useQuery(api.documents.listByTask, {
+    taskId: task._id,
+  });
 
   const isCancelled = task.status === "cancelled";
   const isApproved = task.status === "firm_approved";
   const payload = (task.payload ?? {}) as { description?: string };
+
+  // Mirror the server-side `requiresAttachment` guardrail in the UI so the
+  // advance actions are disabled (not silently rejected) until a file lands.
+  // While the query is loading we leave actions enabled; the server still guards.
+  const blockAdvance =
+    !!getTaskTypeDef(task.type)?.requiresAttachment &&
+    attachments !== undefined &&
+    attachments.length === 0;
 
   return (
     <article className="mx-auto w-full max-w-2xl px-8 py-10">
@@ -185,6 +198,7 @@ export function GenericTaskRenderer({ task, customerId }: Props) {
         <section className="mt-9 border-t border-line pt-7">
           <StatusActions
             task={task}
+            blockAdvance={blockAdvance}
             onSetStatus={(status) =>
               setStatus({ taskId: task._id, status })
             }
@@ -447,15 +461,25 @@ function ClientVisibilityInline({
 
 function StatusActions({
   task,
+  blockAdvance = false,
   onSetStatus,
 }: {
   task: Doc<"tasks">;
+  /** When true, forward transitions are gated (e.g. document_request with no
+   * attachment yet). "Back to draft"/reopen stay available. */
+  blockAdvance?: boolean;
   onSetStatus: (
     status: "draft" | "review" | "firm_approved" | "cancelled",
   ) => Promise<unknown>;
 }) {
   const isSimpleType =
     task.type === "core.todo" || task.type === "core.meeting";
+
+  const blockedHint = blockAdvance ? (
+    <span className="ml-auto text-[11px] text-ink-3">
+      Attach a document to continue
+    </span>
+  ) : null;
 
   // Simple done/reopen flow.
   if (isSimpleType) {
@@ -490,25 +514,36 @@ function StatusActions({
     case "draft":
       return (
         <div className="flex flex-wrap items-center gap-3">
-          <Button size="lg" onClick={() => void onSetStatus("review")}>
+          <Button
+            size="lg"
+            disabled={blockAdvance}
+            onClick={() => void onSetStatus("review")}
+          >
             Send for review
           </Button>
           <Button
             size="lg"
             variant="outline"
+            disabled={blockAdvance}
             onClick={() => void onSetStatus("firm_approved")}
           >
             Mark complete
           </Button>
-          <span className="ml-auto text-[11px] text-ink-3">
-            Next: <span className="text-ink-2">In review</span>
-          </span>
+          {blockedHint ?? (
+            <span className="ml-auto text-[11px] text-ink-3">
+              Next: <span className="text-ink-2">In review</span>
+            </span>
+          )}
         </div>
       );
     case "review":
       return (
         <div className="flex flex-wrap items-center gap-3">
-          <Button size="lg" onClick={() => void onSetStatus("firm_approved")}>
+          <Button
+            size="lg"
+            disabled={blockAdvance}
+            onClick={() => void onSetStatus("firm_approved")}
+          >
             Approve
           </Button>
           <Button
@@ -518,9 +553,11 @@ function StatusActions({
           >
             Back to draft
           </Button>
-          <span className="ml-auto text-[11px] text-ink-3">
-            Next: <span className="text-ink-2">Approved</span>
-          </span>
+          {blockedHint ?? (
+            <span className="ml-auto text-[11px] text-ink-3">
+              Next: <span className="text-ink-2">Approved</span>
+            </span>
+          )}
         </div>
       );
     case "firm_approved":
@@ -713,14 +750,6 @@ function DescriptionField({
 }
 
 // ── Formatters ─────────────────────────────────────────────────────────
-
-function formatDate(ts: number): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(new Date(ts));
-}
 
 function toDateInputString(ts: number): string {
   const d = new Date(ts);
