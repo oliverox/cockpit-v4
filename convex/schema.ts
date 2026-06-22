@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { accountingTables } from "./modules/accounting/schema";
 
 /**
  * Cockpit v4 core schema.
@@ -77,8 +78,12 @@ const connectorStatus = v.union(
 );
 
 // -- Schema --------------------------------------------------------------
+//
+// Core tables live in `coreTables`; module substrates are spread in below via
+// `defineSchema({ ...coreTables, ...accountingTables })`. This is a literal
+// object merge — there is no runtime auto-registration.
 
-export default defineSchema({
+const coreTables = {
   // ===================================================================
   // 1. Tenancy & people
   // ===================================================================
@@ -655,4 +660,9 @@ export default defineSchema({
     // returns the most recent session for this user.
     .index("by_user", ["userId"])
     .index("by_workspace", ["activeWorkspaceId"]),
+};
+
+export default defineSchema({
+  ...coreTables,
+  ...accountingTables,
 });

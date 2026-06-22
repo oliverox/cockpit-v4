@@ -5,7 +5,7 @@ import type {
   NavEntry,
 } from "./types";
 import { coreManifest } from "./core/manifest";
-import { notaryManifest } from "./notary/manifest";
+import { accountingManifest } from "./accounting/manifest";
 
 /**
  * Static registry of all known modules.
@@ -17,11 +17,8 @@ import { notaryManifest } from "./notary/manifest";
  */
 const MODULES: ModuleManifest[] = [
   coreManifest,
-  // ⚠️ Phase-0 throwaway: proves the install → nav toggle path end-to-end with
-  // zero accounting code. Remove when the real Accounting module lands (Phase 1).
-  notaryManifest,
-  // Industry modules will be added here in later phases:
-  //   accountingManifest,
+  accountingManifest,
+  // More industry modules (e.g. notary) will be added here in later phases.
 ];
 
 /** Every module the codebase knows about. */
@@ -60,6 +57,23 @@ export function getActiveModules(
     }
     return true;
   });
+}
+
+/**
+ * Is a module active for a particular customer? True iff it's installed at the
+ * workspace and not disabled for this customer. Use this (not a raw
+ * `installedModules.includes`) anywhere that gates a module surface, so module
+ * routes agree with the nav that links to them.
+ */
+export function isModuleActive(
+  workspaceInstalledModules: string[],
+  customerEnabledModules: string[] | undefined,
+  moduleId: string,
+): boolean {
+  return getActiveModules(
+    workspaceInstalledModules,
+    customerEnabledModules,
+  ).some((m) => m.id === moduleId);
 }
 
 // ---- Cross-module lookups ----------------------------------------------
