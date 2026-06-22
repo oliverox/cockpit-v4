@@ -1,4 +1,5 @@
 import type { ModuleManifest } from "../types";
+import { CORE_GUARDRAILS, CORE_TASK_TYPES } from "../server";
 
 /**
  * The Core module.
@@ -7,6 +8,11 @@ import type { ModuleManifest } from "../types";
  * workspace gets out of the box, regardless of which industry modules are
  * installed. An agency or consulting firm running Cockpit with zero industry
  * modules still has everything in here.
+ *
+ * The task-type *flags* and guardrails live in the React-free `../server`
+ * registry (the single source of truth Convex reads from); this manifest adds
+ * the client-only presentation (renderers/nav) on top. Core has no custom
+ * renderers yet, so it spreads the server defs as-is.
  */
 export const coreManifest: ModuleManifest = {
   id: "core",
@@ -15,57 +21,6 @@ export const coreManifest: ModuleManifest = {
     "Built-in workspace primitives — generic tasks, documents, threads, calendar.",
   isBuiltIn: true,
 
-  taskTypes: {
-    "core.todo": {
-      label: "Todo",
-      defaultClientVisible: false,
-    },
-    "core.document_request": {
-      label: "Document request",
-      defaultClientVisible: true,
-      requiresAttachment: true,
-    },
-    "core.review": {
-      label: "Review",
-      defaultClientVisible: true,
-    },
-    "core.meeting": {
-      label: "Meeting",
-      defaultClientVisible: false,
-    },
-  },
-
-  guardrails: {
-    "core.todo": {
-      statuses: ["draft", "review", "firm_approved", "cancelled"],
-      reopenPolicy: {
-        draft: "free",
-        review: "free",
-        firm_approved: "free",
-      },
-    },
-    "core.document_request": {
-      statuses: ["draft", "review", "firm_approved", "cancelled"],
-      reopenPolicy: {
-        draft: "free",
-        review: "free",
-        firm_approved: "free",
-      },
-    },
-    "core.review": {
-      statuses: ["draft", "review", "firm_approved", "cancelled"],
-      reopenPolicy: {
-        draft: "free",
-        review: "free",
-        firm_approved: { requires: "admin", reason: "optional" },
-      },
-    },
-    "core.meeting": {
-      statuses: ["draft", "firm_approved", "cancelled"],
-      reopenPolicy: {
-        draft: "free",
-        firm_approved: "free",
-      },
-    },
-  },
+  taskTypes: CORE_TASK_TYPES,
+  guardrails: CORE_GUARDRAILS,
 };

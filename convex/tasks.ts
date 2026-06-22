@@ -10,7 +10,7 @@ import {
   tryGetActor,
 } from "./lib/auth";
 import { getOrCreateClientSharedThread } from "./threads";
-import { getTaskTypeDef } from "../modules/registry";
+import { getTaskTypeServerDef } from "../modules/server";
 
 /**
  * Tasks — the generic envelope every module's work fits into.
@@ -305,7 +305,7 @@ export const setStatus = mutation({
     // approved task (firm_approved → review) is exempt — the artifact existed
     // when it was approved, and reopening shouldn't be blockable.
     if (
-      getTaskTypeDef(task.type)?.requiresAttachment &&
+      getTaskTypeServerDef(task.type)?.requiresAttachment &&
       ARTIFACT_REQUIRED_STATUSES.has(args.status) &&
       task.status !== "firm_approved"
     ) {

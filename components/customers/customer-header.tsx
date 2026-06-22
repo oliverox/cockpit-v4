@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { getActiveModules, getCustomerNavEntries } from "@/modules/registry";
 import { PageHeader } from "@/components/layout/page-header";
 import { CustomerTabs } from "@/components/customers/customer-tabs";
 
@@ -25,14 +26,26 @@ export function CustomerHeader({
   className?: string;
 }) {
   const customer = useQuery(api.customers.get, { customerId });
+  const workspace = useQuery(api.workspaces.getActive);
   const archived = customer?.archived === true;
+
+  // Module-contributed tabs appear once their module is installed for the
+  // workspace (and not disabled for this customer). Computed client-side from
+  // the registry — the manifests carry the nav icons, so nothing crosses the
+  // Convex boundary.
+  const moduleNav = getCustomerNavEntries(
+    getActiveModules(
+      workspace?.installedModules ?? [],
+      customer?.enabledModules,
+    ),
+  );
 
   return (
     <PageHeader
       title={customer?.name ?? "Customer"}
       backHref="/customers"
       backLabel="All customers"
-      center={<CustomerTabs customerId={customerId} />}
+      center={<CustomerTabs customerId={customerId} moduleNav={moduleNav} />}
       badge={
         archived ? (
           <span className="pill pill--neutral">Archived</span>
