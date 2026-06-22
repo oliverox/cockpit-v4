@@ -33,15 +33,14 @@ import {
 import { CustomerFormDialog } from "@/components/customers/customer-form-dialog";
 import { ClientAccessDialog } from "@/components/customers/client-access-dialog";
 import { NewEventDialog } from "@/components/calendar/new-event-dialog";
-import { NewTaskDialog } from "@/components/tasks/new-task-dialog";
 import {
   CalendarView,
   useCalendarMode,
 } from "@/components/calendar/calendar-view";
-import { TaskPanel } from "@/components/calendar/task-panel";
+import { CustomerChatPanel } from "@/components/chat/customer-chat-panel";
 import { LoadingState } from "@/components/states";
 import { PageShell } from "@/components/layout/page-shell";
-import { PageHeader } from "@/components/layout/page-header";
+import { CustomerHeader } from "@/components/customers/customer-header";
 
 export default function CustomerHomePage() {
   const params = useParams<{ id: string }>();
@@ -71,7 +70,6 @@ function CustomerHome({ customer }: { customer: Doc<"customers"> }) {
   const [editOpen, setEditOpen] = useState(false);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [newEventOpen, setNewEventOpen] = useState(false);
-  const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [accessOpen, setAccessOpen] = useState(false);
 
   const [mode, setMode] = useCalendarMode("month");
@@ -87,15 +85,8 @@ function CustomerHome({ customer }: { customer: Doc<"customers"> }) {
 
   return (
     <PageShell>
-      <PageHeader
-        title={customer.name}
-        backHref="/customers"
-        backLabel="All customers"
-        badge={
-          archived ? (
-            <span className="pill pill--neutral">Archived</span>
-          ) : undefined
-        }
+      <CustomerHeader
+        customerId={customerId}
         meta={
           metaChips.length > 0 ? (
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-3">
@@ -155,7 +146,7 @@ function CustomerHome({ customer }: { customer: Doc<"customers"> }) {
         }
       />
 
-      <div className="grid h-[calc(100vh-12rem)] min-h-[640px] gap-6 lg:grid-cols-[minmax(0,1fr)_380px] xl:grid-cols-[minmax(0,1fr)_420px]">
+      <div className="grid h-[calc(100vh-12rem)] min-h-[640px] gap-6 lg:grid-cols-[2fr_1fr]">
         <div className="min-w-0">
           <CalendarView
             items={items}
@@ -167,11 +158,7 @@ function CustomerHome({ customer }: { customer: Doc<"customers"> }) {
             onNewEvent={() => setNewEventOpen(true)}
           />
         </div>
-        <TaskPanel
-          scope="customer"
-          customerId={customerId}
-          onNewTask={() => setNewTaskOpen(true)}
-        />
+        <CustomerChatPanel customerId={customerId} />
       </div>
 
       <CustomerFormDialog
@@ -195,12 +182,6 @@ function CustomerHome({ customer }: { customer: Doc<"customers"> }) {
         open={newEventOpen}
         onOpenChange={setNewEventOpen}
         fixedCustomerId={customerId}
-      />
-
-      <NewTaskDialog
-        open={newTaskOpen}
-        onOpenChange={setNewTaskOpen}
-        customerId={customerId}
       />
 
       <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}>

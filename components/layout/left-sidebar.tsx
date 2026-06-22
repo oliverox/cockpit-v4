@@ -1,15 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useParams } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   Users,
   Calendar,
   MessageCircle,
   Settings,
-  FolderOpen,
-  ListTodo,
-  MessageSquare,
   Wrench,
   PlaneTakeoff,
 } from "lucide-react";
@@ -18,17 +15,12 @@ import { RailButton } from "./rail-button";
 /**
  * Primary (navy) left rail.
  *
- * Top-level (always visible): Customers, Calendar, Settings.
- * When inside a customer (/customers/[id]/...), additional customer-context
- * entries appear: Documents, Tasks, Chat. The customer-home (calendar +
- * tasks panel) is reached via the breadcrumb / customer name itself.
+ * Top-level only: Customers, Calendar, Client conversations, Debug, Settings.
+ * Per-customer navigation (Calendar / Documents / Tasks / Chat) lives in the
+ * customer page header (see `CustomerTabs`), not in this rail.
  */
 export function LeftSidebar() {
   const pathname = usePathname();
-  const params = useParams<{ id?: string }>();
-  const customerId = params?.id;
-  const inCustomerContext =
-    pathname.startsWith("/customers/") && Boolean(customerId);
 
   return (
     <aside className="flex h-full w-14 flex-col items-center gap-2 bg-sidebar py-3 text-sidebar-foreground">
@@ -48,7 +40,7 @@ export function LeftSidebar() {
           href="/customers"
           icon={Users}
           label="Customers"
-          active={pathname === "/customers" || (pathname.startsWith("/customers/") && !inCustomerContext)}
+          active={pathname.startsWith("/customers")}
         />
         <RailButton
           href="/calendar"
@@ -63,33 +55,6 @@ export function LeftSidebar() {
           active={pathname.startsWith("/activity")}
         />
       </nav>
-
-      {/* Customer-context section */}
-      {inCustomerContext && (
-        <>
-          <div className="my-2 h-px w-6 bg-sidebar-border" aria-hidden />
-          <nav className="flex flex-col items-center gap-1">
-            <RailButton
-              href={`/customers/${customerId}/documents`}
-              icon={FolderOpen}
-              label="Documents"
-              active={pathname.startsWith(`/customers/${customerId}/documents`)}
-            />
-            <RailButton
-              href={`/customers/${customerId}/tasks`}
-              icon={ListTodo}
-              label="Tasks"
-              active={pathname.startsWith(`/customers/${customerId}/tasks`)}
-            />
-            <RailButton
-              href={`/customers/${customerId}/chat`}
-              icon={MessageSquare}
-              label="Chat"
-              active={pathname.startsWith(`/customers/${customerId}/chat`)}
-            />
-          </nav>
-        </>
-      )}
 
       {/* Spacer */}
       <div className="flex-1" />

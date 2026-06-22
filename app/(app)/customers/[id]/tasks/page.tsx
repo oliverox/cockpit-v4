@@ -26,7 +26,7 @@ import { statusDisplay, typeDisplay } from "@/lib/task-display";
 import { cn } from "@/lib/utils";
 import { LoadingState } from "@/components/states";
 import { PageShell } from "@/components/layout/page-shell";
-import { PageHeader } from "@/components/layout/page-header";
+import { CustomerHeader } from "@/components/customers/customer-header";
 
 export default function CustomerTasksPage() {
   const params = useParams<{ id: string }>();
@@ -35,10 +35,9 @@ export default function CustomerTasksPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
 
   return (
-    <PageShell className="space-y-6">
-      <PageHeader
-        title="Tasks"
-        className="mb-0"
+    <PageShell>
+      <CustomerHeader
+        customerId={customerId}
         actions={
           <Button onClick={() => setDialogOpen(true)}>
             <Plus className="h-4 w-4" />
@@ -53,21 +52,23 @@ export default function CustomerTasksPage() {
         customerId={customerId}
       />
 
-      {tasks === undefined && <LoadingState />}
+      <div className="space-y-6">
+        {tasks === undefined && <LoadingState />}
 
-      {tasks !== undefined && tasks.length === 0 && (
-        <p className="text-sm text-ink-3">No tasks yet.</p>
-      )}
+        {tasks !== undefined && tasks.length === 0 && (
+          <p className="text-sm text-ink-3">No tasks yet.</p>
+        )}
 
-      {tasks !== undefined && tasks.length > 0 && (
-        <div className="overflow-hidden rounded-lg border border-line bg-card">
-          <ul className="divide-y divide-line">
-            {tasks.map((t) => (
-              <TaskRow key={t._id} task={t} customerId={customerId} />
-            ))}
-          </ul>
-        </div>
-      )}
+        {tasks !== undefined && tasks.length > 0 && (
+          <div className="overflow-hidden rounded-lg border border-line bg-card">
+            <ul className="divide-y divide-line">
+              {tasks.map((t) => (
+                <TaskRow key={t._id} task={t} customerId={customerId} />
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
     </PageShell>
   );
 }

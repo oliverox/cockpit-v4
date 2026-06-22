@@ -20,6 +20,7 @@ import {
 } from "@/components/chat/chat-context-panel";
 import { cn } from "@/lib/utils";
 import { LoadingState } from "@/components/states";
+import { CustomerHeader } from "@/components/customers/customer-header";
 
 export default function CustomerChatPage() {
   const params = useParams<{ id: string }>();
@@ -38,11 +39,20 @@ export default function CustomerChatPage() {
     };
   }, [customerId, ensureThread]);
 
-  if (!threadId) {
-    return <LoadingState centered />;
-  }
-
-  return <ChatSurface threadId={threadId} customerId={customerId} />;
+  return (
+    <div className="flex h-full flex-col">
+      <div className="px-8 pt-8">
+        <CustomerHeader customerId={customerId} />
+      </div>
+      <div className="min-h-0 flex-1 border-t border-line">
+        {threadId ? (
+          <ChatSurface threadId={threadId} customerId={customerId} />
+        ) : (
+          <LoadingState centered />
+        )}
+      </div>
+    </div>
+  );
 }
 
 function ChatSurface({

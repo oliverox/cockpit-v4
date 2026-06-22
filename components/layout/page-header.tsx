@@ -25,6 +25,7 @@ export function PageHeader({
   backLabel = "Back",
   count,
   badge,
+  center,
   meta,
   actions,
   className,
@@ -36,6 +37,8 @@ export function PageHeader({
   backLabel?: string;
   count?: number;
   badge?: ReactNode;
+  /** Centered content on the header row (e.g. a section tab nav). */
+  center?: ReactNode;
   meta?: ReactNode;
   actions?: ReactNode;
   className?: string;
@@ -43,7 +46,7 @@ export function PageHeader({
   return (
     <header
       className={cn(
-        "mb-6 flex flex-wrap items-start justify-between gap-4",
+        "relative mb-6 flex flex-wrap items-start justify-between gap-4",
         className,
       )}
     >
@@ -76,6 +79,11 @@ export function PageHeader({
           <p className="mt-2 max-w-2xl text-sm text-ink-3">{description}</p>
         )}
       </div>
+      {center && (
+        <div className="absolute left-1/2 top-0 hidden -translate-x-1/2 lg:block">
+          {center}
+        </div>
+      )}
       {actions && <div className="flex items-center gap-3">{actions}</div>}
     </header>
   );

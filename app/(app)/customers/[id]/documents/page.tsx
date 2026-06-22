@@ -28,7 +28,7 @@ import { formatBytes, formatDate } from "@/lib/formatters";
 import { cn } from "@/lib/utils";
 import { LoadingState } from "@/components/states";
 import { PageShell } from "@/components/layout/page-shell";
-import { PageHeader } from "@/components/layout/page-header";
+import { CustomerHeader } from "@/components/customers/customer-header";
 
 export default function CustomerDocumentsPage() {
   const params = useParams<{ id: string }>();
@@ -84,10 +84,9 @@ export default function CustomerDocumentsPage() {
   }
 
   return (
-    <PageShell className="space-y-6">
-      <PageHeader
-        title="Documents"
-        className="mb-0"
+    <PageShell>
+      <CustomerHeader
+        customerId={customerId}
         actions={
           <Button onClick={() => inputRef.current?.click()}>
             <UploadIcon className="h-4 w-4" />
@@ -106,60 +105,64 @@ export default function CustomerDocumentsPage() {
         }}
       />
 
-      {uploadingCount > 0 && (
-        <div className="flex items-center gap-2 rounded-md border border-line bg-card-tint px-3 py-2 text-sm text-ink-2">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-fmu-navy" />
-          Uploading {uploadingCount} file{uploadingCount === 1 ? "" : "s"}…
-        </div>
-      )}
+      <div className="space-y-6">
+        {uploadingCount > 0 && (
+          <div className="flex items-center gap-2 rounded-md border border-line bg-card-tint px-3 py-2 text-sm text-ink-2">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-fmu-navy" />
+            Uploading {uploadingCount} file{uploadingCount === 1 ? "" : "s"}…
+          </div>
+        )}
 
-      {uploadError && (
-        <div
-          role="alert"
-          className="rounded-md border border-fmu-red/25 bg-fmu-red/[0.04] px-3 py-2.5 text-sm text-fmu-red"
-        >
-          {uploadError}
-        </div>
-      )}
+        {uploadError && (
+          <div
+            role="alert"
+            className="rounded-md border border-fmu-red/25 bg-fmu-red/[0.04] px-3 py-2.5 text-sm text-fmu-red"
+          >
+            {uploadError}
+          </div>
+        )}
 
-      {documents === undefined && <LoadingState />}
+        {documents === undefined && <LoadingState />}
 
-      {documents !== undefined && documents.length === 0 && uploadingCount === 0 && (
-        <p className="text-sm text-ink-3">No documents yet.</p>
-      )}
+        {documents !== undefined &&
+          documents.length === 0 &&
+          uploadingCount === 0 && (
+            <p className="text-sm text-ink-3">No documents yet.</p>
+          )}
 
-      {documents !== undefined && documents.length > 0 && (
-        <div className="overflow-hidden rounded-lg border border-line bg-card">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-line bg-bg-2">
-                <th className="px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
-                  Name
-                </th>
-                <th className="px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
-                  Size
-                </th>
-                <th className="px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
-                  Visibility
-                </th>
-                <th className="px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
-                  Uploaded
-                </th>
-                <th className="px-4 py-2.5"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {documents.map((doc) => (
-                <DocumentRow
-                  key={doc._id}
-                  doc={doc}
-                  customerId={customerId}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+        {documents !== undefined && documents.length > 0 && (
+          <div className="overflow-hidden rounded-lg border border-line bg-card">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-line bg-bg-2">
+                  <th className="px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                    Name
+                  </th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                    Size
+                  </th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                    Visibility
+                  </th>
+                  <th className="px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                    Uploaded
+                  </th>
+                  <th className="px-4 py-2.5"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {documents.map((doc) => (
+                  <DocumentRow
+                    key={doc._id}
+                    doc={doc}
+                    customerId={customerId}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </PageShell>
   );
 }
