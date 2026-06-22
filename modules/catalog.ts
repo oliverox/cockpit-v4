@@ -28,15 +28,11 @@ export const MODULE_CATALOG: ModuleMeta[] = [
       "Built-in workspace primitives — generic tasks, documents, threads, calendar.",
     isBuiltIn: true,
   },
-  // ⚠️ Phase-0 throwaway. A stub used only to prove the install → nav toggle
-  // path end-to-end with zero accounting code. Delete this entry (and
-  // modules/notary/*, plus the placeholder route) when the real Accounting
-  // module lands in Phase 1.
   {
-    id: "notary",
-    name: "Notary",
-    description: "Signature requests and notarial workflows.",
-    industryTags: ["legal"],
+    id: "accounting",
+    name: "Accounting",
+    description: "Chart of accounts, ledger, bank reconciliation, and VAT.",
+    industryTags: ["accounting"],
   },
 ];
 

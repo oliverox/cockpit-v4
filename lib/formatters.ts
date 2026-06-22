@@ -37,6 +37,16 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+/** Money amount with thousands separators and 2 decimals: "1,234.50". Pair
+ * with the `.num` class for tabular mono alignment. (Currency is MUR by
+ * default; the symbol is shown alongside in context, not baked in here.) */
+export function formatAmount(n: number): string {
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 /** Initials mark from a name: "Ada Lovelace" → "AL", "RITOQUE" → "RI". */
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
