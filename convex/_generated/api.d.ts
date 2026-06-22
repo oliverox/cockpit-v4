@@ -14,6 +14,7 @@ import type * as customers from "../customers.js";
 import type * as documents from "../documents.js";
 import type * as lib_auth from "../lib/auth.js";
 import type * as messages from "../messages.js";
+import type * as modules from "../modules.js";
 import type * as superadmin from "../superadmin.js";
 import type * as tasks from "../tasks.js";
 import type * as team from "../team.js";
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   documents: typeof documents;
   "lib/auth": typeof lib_auth;
   messages: typeof messages;
+  modules: typeof modules;
   superadmin: typeof superadmin;
   tasks: typeof tasks;
   team: typeof team;

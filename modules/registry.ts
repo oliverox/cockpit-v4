@@ -5,6 +5,7 @@ import type {
   NavEntry,
 } from "./types";
 import { coreManifest } from "./core/manifest";
+import { notaryManifest } from "./notary/manifest";
 
 /**
  * Static registry of all known modules.
@@ -16,9 +17,11 @@ import { coreManifest } from "./core/manifest";
  */
 const MODULES: ModuleManifest[] = [
   coreManifest,
+  // ⚠️ Phase-0 throwaway: proves the install → nav toggle path end-to-end with
+  // zero accounting code. Remove when the real Accounting module lands (Phase 1).
+  notaryManifest,
   // Industry modules will be added here in later phases:
   //   accountingManifest,
-  //   notaryManifest,
 ];
 
 /** Every module the codebase knows about. */
@@ -37,19 +40,26 @@ export function getModule(id: string): ModuleManifest | undefined {
  *   • Built-in modules are always active.
  *   • Industry modules are active iff the workspace has opted in.
  *
- * `customerEnabledModules` further narrows the set per-customer (e.g.
+ * `customerEnabledModules` further NARROWS the set per-customer (e.g.
  * a customer with the Payroll module disabled won't see its nav entries
- * even though the workspace has Payroll installed).
+ * even though the workspace has Payroll installed). It can only subtract from
+ * the workspace's installed set, never add — a module must be installed at the
+ * workspace before any customer can use it.
  */
 export function getActiveModules(
   workspaceInstalledModules: string[],
   customerEnabledModules?: string[],
 ): ModuleManifest[] {
-  const opted =
-    customerEnabledModules !== undefined
-      ? customerEnabledModules
-      : workspaceInstalledModules;
-  return MODULES.filter((m) => m.isBuiltIn || opted.includes(m.id));
+  return MODULES.filter((m) => {
+    if (m.isBuiltIn) return true;
+    // Must be installed at the workspace.
+    if (!workspaceInstalledModules.includes(m.id)) return false;
+    // If the customer declares an explicit enabled set, narrow to it.
+    if (customerEnabledModules !== undefined) {
+      return customerEnabledModules.includes(m.id);
+    }
+    return true;
+  });
 }
 
 // ---- Cross-module lookups ----------------------------------------------

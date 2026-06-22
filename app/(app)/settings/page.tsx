@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronRight, Users } from "lucide-react";
+import { Blocks, ChevronRight, Users } from "lucide-react";
 import { PageShell } from "@/components/layout/page-shell";
 import { PageHeader } from "@/components/layout/page-header";
 
@@ -9,6 +9,12 @@ const sections = [
     label: "Team",
     description: "Members, roles, and customer scopes.",
     icon: Users,
+  },
+  {
+    href: "/settings/modules",
+    label: "Modules",
+    description: "Turn industry modules on or off for this firm.",
+    icon: Blocks,
   },
 ];
 
