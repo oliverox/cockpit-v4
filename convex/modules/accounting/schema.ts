@@ -13,9 +13,9 @@ import { v } from "convex/values";
  *   • All `accounting_`-prefixed to avoid collisions with core tables.
  *   • Indexes are withIndex-friendly; never filter() at query time.
  *
- * Phase 1 ships the Chart of Accounts substrate only:
- *   accounting_accounts + accounting_opening_balances.
- * Ledger, bank-rec, VAT and budget tables arrive in later phases.
+ * Phase 1: accounting_accounts + accounting_opening_balances (Chart of Accounts).
+ * Phase 2: accounting_ledger_entries (the double-entry ledger).
+ * Bank-rec, VAT and budget tables arrive in later phases.
  */
 
 export const accountType = v.union(
@@ -24,6 +24,18 @@ export const accountType = v.union(
   v.literal("equity"),
   v.literal("revenue"),
   v.literal("expense"),
+);
+
+export const ledgerSourceType = v.union(
+  v.literal("journal_entry"),
+  v.literal("bank_statement"),
+  v.literal("opening_balance"),
+  v.literal("system"),
+);
+
+export const reconciliationStatus = v.union(
+  v.literal("unreconciled"),
+  v.literal("reconciled"),
 );
 
 export const accountingTables = {
@@ -55,4 +67,41 @@ export const accountingTables = {
     credit: v.number(),
     asOf: v.number(),
   }).index("by_customer_and_account", ["customerId", "accountCode"]),
+
+  /**
+   * The double-entry ledger. Written ONLY by the approval engine
+   * (convex/modules/accounting/finalize.ts) as a side-effect of approving a
+   * task — never by a client mutation. `periodKey` ('YYYY-MM') powers cheap
+   * time-bucketed analytics. The reconciliation + bank fields are unused in
+   * Phase 2 but make the table bank-rec-ready for Phase 3 (bank-statement
+   * upload feeding the ledger).
+   */
+  accounting_ledger_entries: defineTable({
+    workspaceId: v.id("workspaces"),
+    customerId: v.id("customers"),
+    date: v.number(),
+    periodKey: v.string(),
+    accountCode: v.string(),
+    description: v.string(),
+    debit: v.number(),
+    credit: v.number(),
+    sourceType: ledgerSourceType,
+    /** Groups all lines posted together (the balanced-assertion unit). */
+    batchId: v.string(),
+    reference: v.optional(v.string()),
+    postedByTaskId: v.optional(v.id("tasks")),
+    postedBy: v.optional(v.id("users")),
+    postedAt: v.number(),
+    /** Phase 3: string until a bank_accounts table exists, then re-typed. */
+    bankAccountId: v.optional(v.string()),
+    reconciliationStatus: reconciliationStatus,
+    reconciliationId: v.optional(v.string()),
+  })
+    .index("by_customer_and_period", ["customerId", "periodKey"])
+    .index("by_customer_and_date", ["customerId", "date"])
+    .index("by_customer_and_account", ["customerId", "accountCode"])
+    .index("by_workspace_and_customer", ["workspaceId", "customerId"])
+    .index("by_posted_task", ["postedByTaskId"])
+    .index("by_batch", ["batchId"])
+    .index("by_customer_and_recon", ["customerId", "reconciliationStatus"]),
 };
