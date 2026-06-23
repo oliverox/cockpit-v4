@@ -10,7 +10,8 @@ import {
   tryGetActor,
 } from "./lib/auth";
 import { getOrCreateClientSharedThread } from "./threads";
-import { getTaskTypeServerDef } from "../modules/server";
+import { getGuardrailForTaskType, getTaskTypeServerDef } from "../modules/server";
+import { getFinalizeHandler, reverseApproval } from "./lib/approvalEngine";
 
 /**
  * Tasks — the generic envelope every module's work fits into.
@@ -202,6 +203,18 @@ export const update = mutation({
       throw new Error("No access to this task");
     }
 
+    // A posted (approved) entry that drives substrate side-effects is frozen —
+    // its payload was committed to the ledger. Reopen to edit.
+    if (
+      args.payload !== undefined &&
+      task.status === "firm_approved" &&
+      getFinalizeHandler(task.type)
+    ) {
+      throw new Error(
+        "This entry is posted — reopen it before editing its contents.",
+      );
+    }
+
     const patch: Record<string, unknown> = {};
     if (args.title !== undefined) {
       const next = args.title.trim().slice(0, 300);
@@ -320,16 +333,51 @@ export const setStatus = mutation({
       }
     }
 
-    // Reopening (firm_approved → review) requires firm owner
-    if (
-      task.status === "firm_approved" &&
-      args.status === "review" &&
-      !canManageTeam(actor)
-    ) {
-      throw new Error("Only the firm owner can reopen approved tasks");
+    // Reopening (firm_approved → review) requires firm owner, and — when the
+    // type's guardrail demands it — a reason, since it unwinds committed
+    // side-effects (e.g. a posted ledger batch).
+    if (task.status === "firm_approved" && args.status === "review") {
+      if (!canManageTeam(actor)) {
+        throw new Error("Only the firm owner can reopen approved tasks");
+      }
+      const policy =
+        getGuardrailForTaskType(task.type)?.reopenPolicy?.firm_approved;
+      if (
+        typeof policy === "object" &&
+        policy.reason === "required" &&
+        !args.reason?.trim()
+      ) {
+        throw new Error("A reason is required to reopen this approved entry.");
+      }
     }
 
     await ctx.db.patch(args.taskId, { status: args.status });
+
+    // Module approval side-effects (generic; dispatched via the finalize
+    // registry so core stays module-agnostic). DB-only and inline within this
+    // mutation: if a finalize throws (e.g. an unbalanced journal entry), the
+    // status flip rolls back too — task state and substrate never diverge.
+    if (args.status === "firm_approved") {
+      const finalize = getFinalizeHandler(task.type);
+      if (finalize) {
+        const sideEffects = await finalize(ctx, {
+          task,
+          approvedBy: actor.userId,
+        });
+        await ctx.db.insert("task_approvals", {
+          taskId: task._id,
+          workspaceId: task.workspaceId,
+          approvedBy: actor.userId,
+          approvedAt: Date.now(),
+          toStatus: args.status,
+          sideEffects,
+        });
+      }
+    } else if (task.status === "firm_approved") {
+      // Leaving an approved state by ANY route (reopen → review, or cancel)
+      // reverses the posted side-effects so the ledger never strands rows.
+      await reverseApproval(ctx, task, actor.userId);
+    }
 
     await ctx.db.insert("audit_log", {
       workspaceId: task.workspaceId,
@@ -369,6 +417,12 @@ export const archive = mutation({
       throw new Error("No access");
     }
     if (task.status === "cancelled") return args.taskId;
+
+    // Archiving an approved entry must unwind its posted side-effects too,
+    // otherwise the ledger keeps rows whose task is gone.
+    if (task.status === "firm_approved") {
+      await reverseApproval(ctx, task, actor.userId);
+    }
 
     const before = { status: task.status };
     await ctx.db.patch(args.taskId, { status: "cancelled" });

@@ -1,17 +1,21 @@
-import { Landmark } from "lucide-react";
+import { BookOpen, Landmark } from "lucide-react";
 import type { ModuleManifest } from "../types";
+import { ACCOUNTING_TASK_TYPES } from "../server";
+import { JournalEntryRenderer } from "./components/journal-entry-renderer";
 
 /**
  * The Accounting module.
  *
- * Industry module — installed per workspace via /settings/modules. Phase 1
- * ships the Chart of Accounts: an "Accounts" tab on each customer that opens
- * the COA management screen. Ledger, bank reconciliation, VAT and reports
- * (with their task types, guardrails and artifacts) arrive in later phases.
+ * Industry module — installed per workspace via /settings/modules.
+ *   Phase 1: Chart of Accounts ("Accounts" tab).
+ *   Phase 2: the ledger ("Ledger" tab — income/expense, trial balance,
+ *            transactions) + the journal-entry task type that posts to it.
+ * Bank reconciliation, VAT and reports arrive in later phases.
  *
- * The server-safe halves of this module live in modules/catalog.ts (identity)
- * and convex/modules/accounting/* (substrate + functions). This manifest is
- * the client presentation layer — safe to carry React (nav icons, renderers).
+ * The server-safe halves live in modules/catalog.ts (identity), modules/server.ts
+ * (task-type flags + guardrails) and convex/modules/accounting/* (substrate +
+ * functions). This manifest is the client presentation layer — it carries React
+ * (nav icons, task renderers) and spreads the server task-type defs in.
  */
 export const accountingManifest: ModuleManifest = {
   id: "accounting",
@@ -22,6 +26,14 @@ export const accountingManifest: ModuleManifest = {
   navigation: {
     customer: [
       { label: "Accounts", href: "accounting/accounts", icon: Landmark },
+      { label: "Ledger", href: "accounting/ledger", icon: BookOpen },
     ],
+  },
+
+  taskTypes: {
+    "accounting.journal_entry": {
+      ...ACCOUNTING_TASK_TYPES["accounting.journal_entry"],
+      renderer: JournalEntryRenderer,
+    },
   },
 };

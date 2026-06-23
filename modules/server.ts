@@ -62,14 +62,37 @@ export const CORE_GUARDRAILS: Record<string, GuardrailDef> = {
   },
 };
 
-// Aggregate across modules. Plain data only — extend this when a module adds
-// server-relevant task types (e.g. accounting's task types in Phase 1).
+export const ACCOUNTING_TASK_TYPES: Record<string, TaskTypeServerDef> = {
+  "accounting.journal_entry": {
+    label: "Journal entry",
+    defaultClientVisible: false,
+  },
+};
+
+export const ACCOUNTING_GUARDRAILS: Record<string, GuardrailDef> = {
+  "accounting.journal_entry": {
+    statuses: ["draft", "review", "firm_approved", "cancelled"],
+    reopenPolicy: {
+      draft: "free",
+      review: "free",
+      // Reopening unwinds the posted ledger batch — owner-only, reason required.
+      firm_approved: { requires: "owner", reason: "required" },
+    },
+    // Posted ledger lines are period-locked once approved; amend via reopen.
+    locks: { "accounting_ledger_entries.*": "period" },
+  },
+};
+
+// Aggregate across modules. Plain data only — extend when a module adds
+// server-relevant task types.
 const TASK_TYPE_SERVER_DEFS: Record<string, TaskTypeServerDef> = {
   ...CORE_TASK_TYPES,
+  ...ACCOUNTING_TASK_TYPES,
 };
 
 const GUARDRAILS: Record<string, GuardrailDef> = {
   ...CORE_GUARDRAILS,
+  ...ACCOUNTING_GUARDRAILS,
 };
 
 /** Server-safe task-type lookup (flags only — no renderer). */
