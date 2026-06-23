@@ -69,10 +69,28 @@ export async function reverseApproval(
   if (!latest) return;
 
   for (const se of latest.sideEffects) {
-    if (se.op === "create" && se.kind === "substrate") {
-      // refId is the created row's _id; the embedded table info lets Convex
-      // resolve the delete regardless of the cast's nominal table.
-      await ctx.db.delete(se.refId as Id<"accounting_ledger_entries">);
+    if (se.kind !== "substrate") continue;
+    // refId is the row's _id; the embedded table info lets Convex resolve the
+    // delete/patch regardless of the cast's nominal table.
+    const ref = se.refId as Id<"accounting_ledger_entries">;
+    if (se.op === "create") {
+      await ctx.db.delete(ref);
+    } else if (se.op === "update") {
+      // Restore the pre-approval field values — e.g. a matched ledger entry's
+      // reconciliationStatus/reconciliationId (bank-rec matching, Phase 3b).
+      // `before` may carry null to mean "field was absent"; translate null →
+      // undefined so this TOP-LEVEL patch actually CLEARS the field (Convex
+      // drops nested undefined during serialization, so we store null and
+      // clear it here).
+      const before = (se.before ?? {}) as Record<string, unknown>;
+      const patch: Record<string, unknown> = {};
+      for (const k of Object.keys(before)) {
+        patch[k] = before[k] === null ? undefined : before[k];
+      }
+      await ctx.db.patch(
+        ref,
+        patch as Partial<Doc<"accounting_ledger_entries">>,
+      );
     }
   }
 
