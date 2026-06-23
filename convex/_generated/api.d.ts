@@ -17,6 +17,7 @@ import type * as lib_auth from "../lib/auth.js";
 import type * as messages from "../messages.js";
 import type * as modules from "../modules.js";
 import type * as modules_accounting_accounts from "../modules/accounting/accounts.js";
+import type * as modules_accounting_bankAccounts from "../modules/accounting/bankAccounts.js";
 import type * as modules_accounting_finalize from "../modules/accounting/finalize.js";
 import type * as modules_accounting_ledger from "../modules/accounting/ledger.js";
 import type * as superadmin from "../superadmin.js";
@@ -42,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   messages: typeof messages;
   modules: typeof modules;
   "modules/accounting/accounts": typeof modules_accounting_accounts;
+  "modules/accounting/bankAccounts": typeof modules_accounting_bankAccounts;
   "modules/accounting/finalize": typeof modules_accounting_finalize;
   "modules/accounting/ledger": typeof modules_accounting_ledger;
   superadmin: typeof superadmin;

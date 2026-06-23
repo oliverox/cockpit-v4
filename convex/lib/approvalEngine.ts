@@ -1,6 +1,9 @@
 import type { MutationCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
-import { postJournalEntryToLedger } from "../modules/accounting/finalize";
+import {
+  postBankStatementToLedger,
+  postJournalEntryToLedger,
+} from "../modules/accounting/finalize";
 
 /**
  * Approval side-effect engine.
@@ -38,6 +41,7 @@ export type FinalizeHandler = (
 
 const FINALIZE_HANDLERS: Record<string, FinalizeHandler> = {
   "accounting.journal_entry": postJournalEntryToLedger,
+  "accounting.bank_rec": postBankStatementToLedger,
 };
 
 export function getFinalizeHandler(

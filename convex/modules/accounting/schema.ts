@@ -104,4 +104,45 @@ export const accountingTables = {
     .index("by_posted_task", ["postedByTaskId"])
     .index("by_batch", ["batchId"])
     .index("by_customer_and_recon", ["customerId", "reconciliationStatus"]),
+
+  /**
+   * A customer's bank accounts (Phase 3). `ledgerAccountCode` is the
+   * chart-of-accounts code that is the balancing/contra leg for entries posted
+   * from this account's statements.
+   */
+  accounting_bank_accounts: defineTable({
+    workspaceId: v.id("workspaces"),
+    customerId: v.id("customers"),
+    name: v.string(),
+    bankName: v.optional(v.string()),
+    accountNumberLast4: v.optional(v.string()),
+    currency: v.optional(v.string()),
+    ledgerAccountCode: v.string(),
+    lastReconciledAt: v.optional(v.number()),
+  })
+    .index("by_customer_and_name", ["customerId", "name"])
+    .index("by_workspace_and_customer", ["workspaceId", "customerId"]),
+
+  /**
+   * One posted bank-statement import — the reversible grouping/reversal unit
+   * (analogue of a journal batch). The ledger rows it produced share
+   * reconciliationId === this batch id.
+   */
+  accounting_bank_rec_batches: defineTable({
+    workspaceId: v.id("workspaces"),
+    customerId: v.id("customers"),
+    bankAccountId: v.string(),
+    reconciliationId: v.string(),
+    /** Hash of the uploaded statement — enforced against duplicate imports. */
+    statementFileHash: v.optional(v.string()),
+    periodStart: v.optional(v.number()),
+    periodEnd: v.optional(v.number()),
+    lineCount: v.number(),
+    postedByTaskId: v.id("tasks"),
+    postedBy: v.id("users"),
+    postedAt: v.number(),
+  })
+    .index("by_customer", ["customerId"])
+    .index("by_reconciliation", ["reconciliationId"])
+    .index("by_posted_task", ["postedByTaskId"]),
 };
