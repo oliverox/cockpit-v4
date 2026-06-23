@@ -12,12 +12,14 @@ import { formatAmount, formatDate } from "@/lib/formatters";
 import {
   type BankRecPayload,
   type ColumnMap,
+  type LineMatch,
   type StatementLine,
   bankRecCoverage,
   guessColumnMap,
   hashText,
   mapRowsToLines,
   parseStatementCsv,
+  suggestExactMatches,
 } from "@/modules/accounting/lib/bank-statement";
 
 type Parsed = { headers: string[]; rows: Record<string, string>[] };
@@ -42,6 +44,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
 
   const [bankAccountId, setBankAccountId] = useState(server.bankAccountId ?? "");
   const [lines, setLines] = useState<StatementLine[]>(server.lines ?? []);
+  const [matches, setMatches] = useState<LineMatch[]>(server.matches ?? []);
   const [hash, setHash] = useState(server.statementFileHash ?? "");
   const [parsed, setParsed] = useState<Parsed | null>(null);
   const [columnMap, setColumnMap] = useState<ColumnMap | null>(null);
@@ -54,7 +57,36 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     null,
   );
 
-  const coverage = bankRecCoverage(lines);
+  const contraCode = (bankAccounts ?? []).find(
+    (b) => b._id === bankAccountId,
+  )?.ledgerAccountCode;
+  // Unreconciled entries on this bank's ledger account — the only valid match
+  // targets. Loads once a bank account is chosen.
+  const candidatesQ = useQuery(
+    api.modules.accounting.ledger.getUnreconciledEntries,
+    contraCode && editable
+      ? { customerId: task.customerId, accountCode: contraCode }
+      : "skip",
+  );
+
+  const candidates = candidatesQ ?? [];
+  const matchedHashes = new Set(matches.map((m) => m.rowHash));
+  const matchedLedgerIds = new Set(matches.map((m) => m.ledgerEntryId));
+  // Candidates not already claimed by another matched line.
+  const availableCandidates = candidates.filter(
+    (c) => !matchedLedgerIds.has(c._id),
+  );
+  const isResolved = (l: StatementLine) =>
+    !!l.accountCode || matchedHashes.has(l.rowHash);
+  // Deterministic exact-match suggestions over still-unresolved lines —
+  // surfaced for the user to accept, never silently applied.
+  const suggestions = suggestExactMatches(
+    lines.filter((l) => !isResolved(l)),
+    availableCandidates,
+  );
+  const suggestionByHash = new Map(suggestions.map((s) => [s.rowHash, s]));
+
+  const coverage = bankRecCoverage(lines, matches);
   const ready =
     coverage.ready && !!bankAccountId && (accounts?.length ?? 0) > 0;
   const postedBankName = (bankAccounts ?? []).find(
@@ -68,6 +100,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
       bankAccountId,
       statementFileHash: hash,
       lines,
+      matches,
       ...next,
     };
     const dates = merged.lines.map((l) => l.date);
@@ -98,6 +131,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     }
     setError(null);
     setLines(mapped);
+    setMatches([]);
     setParsed(null);
     setColumnMap(null);
     if (skipped.length > 0) {
@@ -114,17 +148,58 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     } else {
       setNotice(null);
     }
-    void persist({ lines: mapped });
+    void persist({ lines: mapped, matches: [] });
   }
 
-  function setLineAccount(rowHash: string, accountCode: string) {
-    setLines((prev) => {
-      const next = prev.map((l) =>
-        l.rowHash === rowHash ? { ...l, accountCode } : l,
+  /** Set a line's treatment from the unified dropdown: "match:<ledgerId>",
+   *  "cat:<accountCode>", or "" (clear). Match and category are mutually
+   *  exclusive per line. */
+  function setTreatment(line: StatementLine, value: string) {
+    let nextMatches = matches.filter((m) => m.rowHash !== line.rowHash);
+    let nextLines = lines;
+    if (value.startsWith("match:")) {
+      const ledgerEntryId = value.slice(6);
+      const cand = candidates.find((c) => c._id === ledgerEntryId);
+      if (!cand) return;
+      nextMatches = [
+        ...nextMatches,
+        {
+          rowHash: line.rowHash,
+          ledgerEntryId,
+          matchType: "manual",
+          ledgerDate: cand.date,
+          ledgerDescription: cand.description,
+          ledgerAmount: cand.signedAmount,
+        },
+      ];
+      nextLines = lines.map((l) =>
+        l.rowHash === line.rowHash ? { ...l, accountCode: undefined } : l,
       );
-      void persist({ lines: next });
-      return next;
-    });
+    } else if (value.startsWith("cat:")) {
+      nextLines = lines.map((l) =>
+        l.rowHash === line.rowHash ? { ...l, accountCode: value.slice(4) } : l,
+      );
+    } else {
+      nextLines = lines.map((l) =>
+        l.rowHash === line.rowHash ? { ...l, accountCode: undefined } : l,
+      );
+    }
+    setMatches(nextMatches);
+    setLines(nextLines);
+    void persist({ lines: nextLines, matches: nextMatches });
+  }
+
+  function acceptSuggestion(line: StatementLine, s: LineMatch) {
+    const nextMatches = [
+      ...matches.filter((m) => m.rowHash !== line.rowHash),
+      s,
+    ];
+    const nextLines = lines.map((l) =>
+      l.rowHash === line.rowHash ? { ...l, accountCode: undefined } : l,
+    );
+    setMatches(nextMatches);
+    setLines(nextLines);
+    void persist({ lines: nextLines, matches: nextMatches });
   }
 
   async function chooseBank(id: string) {
@@ -396,8 +471,8 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
                 coverage.ready ? "pill--balanced" : "pill--blocked",
               )}
             >
-              <span className="num">{coverage.categorized}</span>/
-              <span className="num">{coverage.total}</span> categorized
+              <span className="num">{coverage.resolved}</span>/
+              <span className="num">{coverage.total}</span> resolved
             </span>
           </div>
           <div className="overflow-x-auto rounded-xl border border-line bg-card">
@@ -407,7 +482,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
                   <th className="w-28 px-3 py-2.5">Date</th>
                   <th className="px-3 py-2.5">Description</th>
                   <th className="w-28 px-3 py-2.5 text-right">Amount</th>
-                  <th className="w-56 px-3 py-2.5">Category account</th>
+                  <th className="w-72 px-3 py-2.5">Match or categorize</th>
                 </tr>
               </thead>
               <tbody>
@@ -431,25 +506,83 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
                     </td>
                     <td className="px-3 py-1.5">
                       {editable ? (
-                        <select
-                          value={l.accountCode ?? ""}
-                          onChange={(e) =>
-                            setLineAccount(l.rowHash, e.target.value)
-                          }
-                          className={cn(
-                            "w-full rounded border bg-card px-2 py-1 text-xs outline-none focus:border-fmu-navy",
-                            l.accountCode ? "border-line" : "border-fmu-yellow",
-                          )}
-                        >
-                          <option value="">Uncategorized…</option>
-                          {(accounts ?? []).map((a) => (
-                            <option key={a._id} value={a.code}>
-                              {a.code} — {a.name}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="space-y-1">
+                          <select
+                            value={
+                              matchedHashes.has(l.rowHash)
+                                ? `match:${matches.find((m) => m.rowHash === l.rowHash)!.ledgerEntryId}`
+                                : l.accountCode
+                                  ? `cat:${l.accountCode}`
+                                  : ""
+                            }
+                            onChange={(e) => setTreatment(l, e.target.value)}
+                            className={cn(
+                              "w-full rounded border bg-card px-2 py-1 text-xs outline-none focus:border-fmu-navy",
+                              isResolved(l)
+                                ? "border-line"
+                                : "border-fmu-yellow",
+                            )}
+                          >
+                            <option value="">Choose…</option>
+                            {(availableCandidates.length > 0 ||
+                              matchedHashes.has(l.rowHash)) && (
+                              <optgroup label="Match an existing entry">
+                                {matchedHashes.has(l.rowHash) &&
+                                  (() => {
+                                    const lm = matches.find(
+                                      (m) => m.rowHash === l.rowHash,
+                                    )!;
+                                    return (
+                                      <option
+                                        value={`match:${lm.ledgerEntryId}`}
+                                      >
+                                        {formatDate(lm.ledgerDate)} ·{" "}
+                                        {lm.ledgerDescription} ·{" "}
+                                        {fmtSigned(lm.ledgerAmount)} (matched)
+                                      </option>
+                                    );
+                                  })()}
+                                {availableCandidates.map((c) => (
+                                  <option key={c._id} value={`match:${c._id}`}>
+                                    {formatDate(c.date)} · {c.description} ·{" "}
+                                    {fmtSigned(c.signedAmount)}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            <optgroup label="Post as new — category">
+                              {(accounts ?? []).map((a) => (
+                                <option key={a._id} value={`cat:${a.code}`}>
+                                  {a.code} — {a.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          </select>
+                          {!isResolved(l) &&
+                            suggestionByHash.has(l.rowHash) && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  acceptSuggestion(
+                                    l,
+                                    suggestionByHash.get(l.rowHash)!,
+                                  )
+                                }
+                                className="block text-left text-[10px] text-fmu-navy hover:underline"
+                              >
+                                Suggested:{" "}
+                                {suggestionByHash.get(l.rowHash)!
+                                  .ledgerDescription}{" "}
+                                — accept
+                              </button>
+                            )}
+                        </div>
                       ) : (
-                        <span className="num text-ink-2">{l.accountCode}</span>
+                        <span className="num text-ink-2">
+                          {matchedHashes.has(l.rowHash)
+                            ? "Matched"
+                            : l.accountCode}
+                        </span>
                       )}
                     </td>
                   </tr>
@@ -457,6 +590,23 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
               </tbody>
             </table>
           </div>
+          {editable && (
+            <div className="flex flex-wrap gap-4 text-[11px] text-ink-3">
+              <span>
+                <span className="num">{matches.length}</span> matched
+              </span>
+              <span>
+                <span className="num">
+                  {lines.filter((l) => !!l.accountCode).length}
+                </span>{" "}
+                new
+              </span>
+              <span>
+                <span className="num">{availableCandidates.length}</span>{" "}
+                ledger entries still unreconciled
+              </span>
+            </div>
+          )}
         </section>
       )}
 
@@ -545,8 +695,8 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
             {!ready && (
               <span className="ml-auto text-[11px] text-ink-3">
                 {bankAccountId
-                  ? "Categorize every line to post"
-                  : "Choose a bank account and categorize every line"}
+                  ? "Match or categorize every line to post"
+                  : "Choose a bank account and resolve every line"}
               </span>
             )}
           </div>
@@ -554,6 +704,11 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
       </section>
     </div>
   );
+}
+
+/** Signed money: "+1,234.50" / "−1,234.50". */
+function fmtSigned(n: number): string {
+  return `${n < 0 ? "−" : "+"}${formatAmount(Math.abs(n))}`;
 }
 
 function Labeled({

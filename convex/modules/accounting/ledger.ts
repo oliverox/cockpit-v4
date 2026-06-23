@@ -217,3 +217,58 @@ export const getIncomeExpenseSeries = query({
     });
   },
 });
+
+/**
+ * Unreconciled ledger entries — candidates a bank-statement line can match
+ * against (Phase 3b). Scoped by customer + reconciliationStatus only (not by
+ * bank account), because the usual match target is a manually-booked journal
+ * entry, which carries no bankAccountId. Firm-only.
+ */
+export const getUnreconciledEntries = query({
+  args: {
+    customerId: v.id("customers"),
+    /** Scope candidates to one ledger account (the bank's contra code). */
+    accountCode: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    if (!(await gateRead(ctx, args.customerId))) return [];
+    const names = await loadAccountIndex(ctx, args.customerId);
+
+    let rows;
+    if (args.accountCode) {
+      // Entries on the bank's contra account (the only valid match targets).
+      const all = await ctx.db
+        .query("accounting_ledger_entries")
+        .withIndex("by_customer_and_account", (q) =>
+          q.eq("customerId", args.customerId).eq("accountCode", args.accountCode!),
+        )
+        .take(args.limit ?? 1000);
+      rows = all.filter((e) => e.reconciliationStatus === "unreconciled");
+    } else {
+      rows = await ctx.db
+        .query("accounting_ledger_entries")
+        .withIndex("by_customer_and_recon", (q) =>
+          q
+            .eq("customerId", args.customerId)
+            .eq("reconciliationStatus", "unreconciled"),
+        )
+        .order("desc")
+        .take(args.limit ?? 500);
+    }
+
+    return rows
+      .sort((a, b) => b.date - a.date)
+      .map((e) => ({
+        _id: e._id,
+        date: e.date,
+        description: e.description,
+        accountCode: e.accountCode,
+        accountName: names.get(e.accountCode)?.name ?? e.accountCode,
+        // Signed bank effect: debit increases the asset (inflow), credit
+        // decreases it (outflow) — matches a statement line's signedAmount.
+        signedAmount: round2(e.debit - e.credit),
+        sourceType: e.sourceType,
+      }));
+  },
+});

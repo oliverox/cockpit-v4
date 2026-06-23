@@ -231,6 +231,26 @@ export type StatementLine = {
   accountCode?: string;
 };
 
+/** A statement line matched 1:1 to an existing unreconciled ledger entry
+ *  (Phase 3b). Denormalized ledger fields are for display + audit snapshot. */
+export type LineMatch = {
+  rowHash: string;
+  ledgerEntryId: string;
+  matchType: "exact" | "manual";
+  ledgerDate: number;
+  ledgerDescription: string;
+  ledgerAmount: number;
+};
+
+/** A candidate unreconciled ledger entry to match against. */
+export type MatchCandidate = {
+  _id: string;
+  date: number;
+  description: string;
+  /** Signed bank effect (debit−credit): positive = inflow, negative = outflow. */
+  signedAmount: number;
+};
+
 /** The accounting.bank_rec task's draft payload (opaque to core). */
 export type BankRecPayload = {
   /** accounting_bank_accounts id (stringified — opaque in the payload). */
@@ -239,6 +259,8 @@ export type BankRecPayload = {
   periodStart?: number;
   periodEnd?: number;
   lines: StatementLine[];
+  /** Lines matched to existing ledger entries (vs categorized as new). */
+  matches?: LineMatch[];
 };
 
 /** djb2 string hash → short base36 string. */
@@ -289,14 +311,60 @@ export function mapRowsToLines(
   return { lines, skipped };
 }
 
-/** Every line categorized + a bank account chosen — the client mirror of the
- *  server's post-time assertion. */
-export function bankRecCoverage(lines: StatementLine[]): {
-  total: number;
-  categorized: number;
-  ready: boolean;
-} {
+/** Every line resolved — categorized as new OR matched to an existing ledger
+ *  entry. The client mirror of the server's post-time assertion. */
+export function bankRecCoverage(
+  lines: StatementLine[],
+  matches: LineMatch[] = [],
+): { total: number; resolved: number; ready: boolean } {
+  const matched = new Set(matches.map((m) => m.rowHash));
   const total = lines.length;
-  const categorized = lines.filter((l) => !!l.accountCode).length;
-  return { total, categorized, ready: total > 0 && categorized === total };
+  const resolved = lines.filter(
+    (l) => !!l.accountCode || matched.has(l.rowHash),
+  ).length;
+  return { total, resolved, ready: total > 0 && resolved === total };
+}
+
+const MATCH_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Deterministic exact-match suggestions: amount within 0.02 (sign-agnostic)
+ * and date within 3 days, greedy 1:1 (each candidate used at most once),
+ * best by date proximity then amount delta. No AI (that's Phase 3c).
+ */
+export function suggestExactMatches(
+  lines: StatementLine[],
+  candidates: MatchCandidate[],
+): LineMatch[] {
+  const used = new Set<string>();
+  const out: LineMatch[] = [];
+  for (const line of lines) {
+    let best: MatchCandidate | null = null;
+    let bestScore = Infinity;
+    for (const c of candidates) {
+      if (used.has(c._id)) continue;
+      // Signed comparison enforces amount AND direction together.
+      const delta = Math.abs(c.signedAmount - line.signedAmount);
+      if (delta > 0.02) continue;
+      const dd = Math.abs(c.date - line.date);
+      if (dd > 3 * MATCH_DAY) continue;
+      const score = dd + delta * MATCH_DAY;
+      if (score < bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+    if (best) {
+      used.add(best._id);
+      out.push({
+        rowHash: line.rowHash,
+        ledgerEntryId: best._id,
+        matchType: "exact",
+        ledgerDate: best.date,
+        ledgerDescription: best.description,
+        ledgerAmount: best.signedAmount,
+      });
+    }
+  }
+  return out;
 }
