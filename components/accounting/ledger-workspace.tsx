@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
-import { Loader2, Plus } from "lucide-react";
+import { Loader2, Plus, Upload } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
@@ -32,14 +32,14 @@ export function LedgerWorkspace({
   const createTask = useMutation(api.tasks.create);
   const [creating, setCreating] = useState(false);
 
-  async function newJournalEntry() {
+  async function createAndOpen(type: string, title: string) {
     setCreating(true);
     try {
       const taskId = await createTask({
         customerId,
         moduleId: "accounting",
-        type: "accounting.journal_entry",
-        title: "Journal entry",
+        type,
+        title,
       });
       router.push(`/customers/${customerId}/tasks/${taskId}`);
     } catch {
@@ -67,18 +67,33 @@ export function LedgerWorkspace({
             </button>
           ))}
         </div>
-        <Button
-          size="sm"
-          onClick={() => void newJournalEntry()}
-          disabled={creating}
-        >
-          {creating ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Plus className="h-3.5 w-3.5" />
-          )}
-          New journal entry
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              void createAndOpen("accounting.bank_rec", "Bank statement import")
+            }
+            disabled={creating}
+          >
+            <Upload className="h-3.5 w-3.5" />
+            Import bank statement
+          </Button>
+          <Button
+            size="sm"
+            onClick={() =>
+              void createAndOpen("accounting.journal_entry", "Journal entry")
+            }
+            disabled={creating}
+          >
+            {creating ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
+            New journal entry
+          </Button>
+        </div>
       </div>
 
       {view === "pnl" && (

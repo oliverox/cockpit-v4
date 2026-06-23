@@ -67,6 +67,12 @@ export const ACCOUNTING_TASK_TYPES: Record<string, TaskTypeServerDef> = {
     label: "Journal entry",
     defaultClientVisible: false,
   },
+  "accounting.bank_rec": {
+    label: "Bank reconciliation",
+    defaultClientVisible: false,
+    // The statement is parsed client-side into the payload; the post action is
+    // gated on every line being categorized rather than on a document.
+  },
 };
 
 export const ACCOUNTING_GUARDRAILS: Record<string, GuardrailDef> = {
@@ -79,6 +85,16 @@ export const ACCOUNTING_GUARDRAILS: Record<string, GuardrailDef> = {
       firm_approved: { requires: "owner", reason: "required" },
     },
     // Posted ledger lines are period-locked once approved; amend via reopen.
+    locks: { "accounting_ledger_entries.*": "period" },
+  },
+  "accounting.bank_rec": {
+    statuses: ["draft", "review", "firm_approved", "cancelled"],
+    reopenPolicy: {
+      draft: "free",
+      review: "free",
+      // Reopening unwinds the posted statement batch — owner-only, reason required.
+      firm_approved: { requires: "owner", reason: "required" },
+    },
     locks: { "accounting_ledger_entries.*": "period" },
   },
 };
