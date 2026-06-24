@@ -347,6 +347,10 @@ export async function postBankStatementToLedger(
       lines: lines.length,
       bankAccountId: payload.bankAccountId,
       postedByTaskId: task._id,
+      // Reconciliation tie-out at post time (Phase 3c-ii) — durable audit of a
+      // posted-with-acknowledged-variance batch.
+      varianceAtPost: payload.varianceAtPost,
+      varianceAcknowledged: payload.varianceAcknowledged,
     },
   });
 

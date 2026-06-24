@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { Loader2, RotateCcw, Sparkles, Upload } from "lucide-react";
@@ -16,9 +16,11 @@ import {
   type LineMatch,
   type StatementLine,
   bankRecCoverage,
+  bankRecVariance,
   guessColumnMap,
   hashText,
   mapRowsToLines,
+  parseAmount,
   parseStatementCsv,
   suggestExactMatches,
 } from "@/modules/accounting/lib/bank-statement";
@@ -78,6 +80,20 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     openingBalance: server.openingBalance,
     closingBalance: server.closingBalance,
   });
+  // Input buffers for the balance fields (controlled, so the variance/gate track
+  // what's typed within the same render; meta holds the parsed numbers).
+  const [openingStr, setOpeningStr] = useState(
+    server.openingBalance != null ? String(server.openingBalance) : "",
+  );
+  const [closingStr, setClosingStr] = useState(
+    server.closingBalance != null ? String(server.closingBalance) : "",
+  );
+  const [ackVariance, setAckVariance] = useState(false);
+  // A line / match / balance edit invalidates a prior variance acknowledgement,
+  // so the soft gate re-arms (the checkbox must be re-ticked).
+  useEffect(() => {
+    setAckVariance(false);
+  }, [lines, matches, meta.openingBalance, meta.closingBalance]);
 
   const contraCode = (bankAccounts ?? []).find(
     (b) => b._id === bankAccountId,
@@ -109,8 +125,21 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
   const suggestionByHash = new Map(suggestions.map((s) => [s.rowHash, s]));
 
   const coverage = bankRecCoverage(lines, matches);
+  const variance = bankRecVariance(
+    lines,
+    meta.openingBalance,
+    meta.closingBalance,
+  );
+  // Soft variance gate: block posting only when balances are known AND don't
+  // tie out AND the user hasn't acknowledged the discrepancy. Unknown balances
+  // (common for CSV) never block.
+  const varianceOk =
+    variance.variance === null || variance.tied || ackVariance;
   const ready =
-    coverage.ready && !!bankAccountId && (accounts?.length ?? 0) > 0;
+    coverage.ready &&
+    !!bankAccountId &&
+    (accounts?.length ?? 0) > 0 &&
+    varianceOk;
   const postedBankName = (bankAccounts ?? []).find(
     (b) => b._id === (server.bankAccountId ?? bankAccountId),
   )?.name;
@@ -181,6 +210,12 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
       setLines(out.lines);
       setMatches([]);
       setMeta(nextMeta);
+      setOpeningStr(
+        nextMeta.openingBalance != null ? String(nextMeta.openingBalance) : "",
+      );
+      setClosingStr(
+        nextMeta.closingBalance != null ? String(nextMeta.closingBalance) : "",
+      );
       setHash(out.fileHash);
       await persist({
         lines: out.lines,
@@ -223,6 +258,8 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
       closingBalance: undefined,
     };
     setMeta(csvMeta);
+    setOpeningStr("");
+    setClosingStr("");
     setParsed(null);
     setColumnMap(null);
     if (skipped.length > 0) {
@@ -317,6 +354,23 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     }
   }
 
+  /** Edit an opening/closing balance. Updates the input buffer + the live meta
+   *  value on every keystroke (so the variance/gate reflect what's on screen),
+   *  and persists only on commit (blur). Empty or non-numeric = unknown, never
+   *  a spurious 0 — the whole tie-out hinges on null (unknown) vs 0 (known). */
+  function editBalance(
+    field: "openingBalance" | "closingBalance",
+    raw: string,
+    commit: boolean,
+  ) {
+    if (field === "openingBalance") setOpeningStr(raw);
+    else setClosingStr(raw);
+    const t = raw.trim();
+    const value = t === "" || !/\d/.test(t) ? undefined : parseAmount(t);
+    setMeta((m) => ({ ...m, [field]: value }));
+    if (commit) void persist({ [field]: value });
+  }
+
   async function transition(
     status: "review" | "firm_approved" | "draft",
     reason?: string,
@@ -324,7 +378,20 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     setError(null);
     setBusy(true);
     try {
-      if (editable) await persist();
+      if (editable) {
+        // Record the variance + acknowledgement at the moment of posting.
+        await persist(
+          status === "firm_approved"
+            ? {
+                varianceAtPost: variance.variance ?? undefined,
+                varianceAcknowledged:
+                  variance.variance !== null && !variance.tied
+                    ? true
+                    : undefined,
+              }
+            : undefined,
+        );
+      }
       await setStatus({ taskId, status, ...(reason ? { reason } : {}) });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -556,18 +623,16 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
         </section>
       )}
 
-      {/* Statement metadata (AI-extracted PDF or captured balances) */}
-      {lines.length > 0 &&
-        (meta.sourceFormat === "pdf" ||
-          meta.bankName ||
-          meta.openingBalance !== undefined ||
-          meta.closingBalance !== undefined) && (
-          <section className="mt-6 rounded-xl border border-line bg-card-tint/40 px-4 py-3 text-[12px] text-ink-2">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+      {/* Reconciliation statement (Phase 3c-ii): does opening + the movement
+          of every line tie out to the stated closing balance? */}
+      {lines.length > 0 && (
+        <section className="mt-6 space-y-3 rounded-xl border border-line bg-card-tint/40 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="eyebrow">Reconciliation</div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
               {meta.sourceFormat === "pdf" && (
                 <span className="inline-flex items-center gap-1 font-medium text-fmu-navy">
-                  <Sparkles className="h-3.5 w-3.5" /> AI-extracted from PDF —
-                  review each line
+                  <Sparkles className="h-3.5 w-3.5" /> AI-extracted
                 </span>
               )}
               {meta.bankName && <span>{meta.bankName}</span>}
@@ -575,25 +640,78 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
               {meta.statementCurrency && (
                 <span className="num">{meta.statementCurrency}</span>
               )}
-              {meta.openingBalance !== undefined && (
-                <span>
-                  Opening{" "}
-                  <span className="num">
-                    {formatAmount(meta.openingBalance)}
-                  </span>
-                </span>
-              )}
-              {meta.closingBalance !== undefined && (
-                <span>
-                  Closing{" "}
-                  <span className="num">
-                    {formatAmount(meta.closingBalance)}
-                  </span>
-                </span>
-              )}
             </div>
-          </section>
-        )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+            <BalanceField
+              label="Opening balance"
+              editable={editable}
+              strValue={openingStr}
+              numValue={meta.openingBalance}
+              onChange={(v) => editBalance("openingBalance", v, false)}
+              onCommit={(v) => editBalance("openingBalance", v, true)}
+            />
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink-3">
+                Movement
+              </span>
+              <span className="num text-[13px]">
+                <span className="text-fmu-green">
+                  +{formatAmount(variance.inflows)}
+                </span>{" "}
+                <span className="text-fmu-red">
+                  −{formatAmount(variance.outflows)}
+                </span>
+              </span>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink-3">
+                Expected closing
+              </span>
+              <span className="num text-[13px] text-ink">
+                {variance.expectedClosing !== null
+                  ? formatAmount(variance.expectedClosing)
+                  : "—"}
+              </span>
+            </div>
+            <BalanceField
+              label="Stated closing"
+              editable={editable}
+              strValue={closingStr}
+              numValue={meta.closingBalance}
+              onChange={(v) => editBalance("closingBalance", v, false)}
+              onCommit={(v) => editBalance("closingBalance", v, true)}
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
+            <span className="text-[12px] text-ink-3">
+              {variance.variance === null
+                ? "Enter opening & closing balances to check the statement ties out."
+                : variance.tied
+                  ? "Opening + movement equals the stated closing balance."
+                  : "Opening + movement doesn't equal the stated closing — a line may be missing, duplicated, or mis-read."}
+            </span>
+            <span
+              className={cn(
+                "pill",
+                variance.variance === null
+                  ? "pill--neutral"
+                  : variance.tied
+                    ? "pill--balanced"
+                    : "pill--blocked",
+              )}
+            >
+              {variance.variance === null
+                ? "No balances"
+                : variance.tied
+                  ? `Reconciled · ${formatAmount(Math.abs(variance.variance))}`
+                  : `Off by ${fmtSigned(variance.variance)}`}
+            </span>
+          </div>
+        </section>
+      )}
 
       {/* Categorize / review */}
       {lines.length > 0 && (
@@ -808,32 +926,62 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
             )}
           </div>
         ) : lines.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-3">
-            {task.status === "draft" && (
+          <div className="space-y-3">
+            {editable &&
+              variance.variance !== null &&
+              !variance.tied && (
+                <label className="flex items-start gap-2 rounded-lg border border-fmu-yellow/40 bg-fmu-yellow/5 p-3 text-[12px] text-ink-2">
+                  <input
+                    type="checkbox"
+                    aria-label="Acknowledge the reconciliation variance and post anyway"
+                    checked={ackVariance}
+                    onChange={(e) => setAckVariance(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    This statement is off by{" "}
+                    <span className="num">{fmtSigned(variance.variance)}</span>{" "}
+                    (expected closing{" "}
+                    <span className="num">
+                      {formatAmount(variance.expectedClosing!)}
+                    </span>
+                    , stated{" "}
+                    <span className="num">
+                      {formatAmount(variance.closing!)}
+                    </span>
+                    ). I've reviewed it and want to post anyway.
+                  </span>
+                </label>
+              )}
+            <div className="flex flex-wrap items-center gap-3">
+              {task.status === "draft" && (
+                <Button
+                  size="lg"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => void transition("review")}
+                >
+                  Send for review
+                </Button>
+              )}
               <Button
                 size="lg"
-                variant="outline"
-                disabled={busy}
-                onClick={() => void transition("review")}
+                disabled={busy || !ready}
+                onClick={() => void transition("firm_approved")}
               >
-                Send for review
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                Approve &amp; post
               </Button>
-            )}
-            <Button
-              size="lg"
-              disabled={busy || !ready}
-              onClick={() => void transition("firm_approved")}
-            >
-              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              Approve &amp; post
-            </Button>
-            {!ready && (
-              <span className="ml-auto text-[11px] text-ink-3">
-                {bankAccountId
-                  ? "Match or categorize every line to post"
-                  : "Choose a bank account and resolve every line"}
-              </span>
-            )}
+              {!ready && (
+                <span className="ml-auto text-[11px] text-ink-3">
+                  {!bankAccountId
+                    ? "Choose a bank account and resolve every line"
+                    : !coverage.ready
+                      ? "Match or categorize every line to post"
+                      : "Acknowledge the reconciliation variance to post"}
+                </span>
+              )}
+            </div>
           </div>
         ) : null}
       </section>
@@ -844,6 +992,47 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
 /** Signed money: "+1,234.50" / "−1,234.50". */
 function fmtSigned(n: number): string {
   return `${n < 0 ? "−" : "+"}${formatAmount(Math.abs(n))}`;
+}
+
+/** An editable (controlled) or read-only opening/closing balance. The editable
+ *  input is driven by a string buffer so the live variance/gate track what's
+ *  typed; the read-only view shows the formatted number. */
+function BalanceField({
+  label,
+  strValue,
+  numValue,
+  editable,
+  onChange,
+  onCommit,
+}: {
+  label: string;
+  strValue: string;
+  numValue: number | undefined;
+  editable: boolean;
+  onChange: (raw: string) => void;
+  onCommit: (raw: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink-3">
+        {label}
+      </span>
+      {editable ? (
+        <input
+          inputMode="decimal"
+          value={strValue}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={(e) => onCommit(e.target.value)}
+          placeholder="—"
+          className="num w-full rounded border border-line bg-card px-2 py-1 text-[13px] outline-none focus:border-fmu-navy"
+        />
+      ) : (
+        <span className="num text-[13px] text-ink">
+          {numValue !== undefined ? formatAmount(numValue) : "—"}
+        </span>
+      )}
+    </div>
+  );
 }
 
 function Labeled({
