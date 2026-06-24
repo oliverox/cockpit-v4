@@ -271,6 +271,11 @@ export type BankRecPayload = {
   periodLabel?: string;
   openingBalance?: number;
   closingBalance?: number;
+  /** Reconciliation variance (expected − stated closing) at the moment of
+   *  posting, and whether a non-zero variance was explicitly acknowledged
+   *  (Phase 3c-ii audit trail). */
+  varianceAtPost?: number;
+  varianceAcknowledged?: boolean;
 };
 
 /** djb2 string hash → short base36 string. */
@@ -333,6 +338,71 @@ export function bankRecCoverage(
     (l) => !!l.accountCode || matched.has(l.rowHash),
   ).length;
   return { total, resolved, ready: total > 0 && resolved === total };
+}
+
+export type BankRecVariance = {
+  /** Both opening and closing balances are known. */
+  hasBalances: boolean;
+  opening: number | null;
+  closing: number | null;
+  /** Positive sum of money-in lines. */
+  inflows: number;
+  /** Positive magnitude of money-out lines. */
+  outflows: number;
+  /** Net movement: inflows − outflows. */
+  movement: number;
+  /** opening + movement (null if no opening). */
+  expectedClosing: number | null;
+  /** expectedClosing − statedClosing (null unless both balances known). */
+  variance: number | null;
+  /** Reconciliation ties out (within tolerance). */
+  tied: boolean;
+};
+
+/**
+ * Statement self-consistency tie-out (Phase 3c-ii): does opening + the sum of
+ * every line equal the stated closing balance? Sums ALL lines (matched and new
+ * alike — the bank's total moved regardless of how each line is posted), so it
+ * is independent of the finalize matched/new partition. Pure; validates that
+ * the captured/extracted lines fully account for the statement's movement.
+ */
+export function bankRecVariance(
+  lines: StatementLine[],
+  opening?: number,
+  closing?: number,
+): BankRecVariance {
+  // Sign-symmetric round to 2dp (round half away from zero, no negative zero).
+  const r2 = (n: number) => {
+    const r = Math.round(Math.abs(n) * 100 + 1e-9) / 100;
+    return n < 0 && r !== 0 ? -r : r;
+  };
+  let inflows = 0;
+  let outflows = 0;
+  for (const l of lines) {
+    if (l.signedAmount > 0) inflows += l.signedAmount;
+    else outflows += -l.signedAmount;
+  }
+  inflows = r2(inflows);
+  outflows = r2(outflows);
+  const movement = r2(inflows - outflows);
+  const op = typeof opening === "number" ? opening : null;
+  const cl = typeof closing === "number" ? closing : null;
+  const hasBalances = op !== null && cl !== null;
+  const expectedClosing = op !== null ? r2(op + movement) : null;
+  const variance =
+    expectedClosing !== null && cl !== null ? r2(expectedClosing - cl) : null;
+  const tied = hasBalances && variance !== null && Math.abs(variance) <= 0.02;
+  return {
+    hasBalances,
+    opening: op,
+    closing: cl,
+    inflows,
+    outflows,
+    movement,
+    expectedClosing,
+    variance,
+    tied,
+  };
 }
 
 const MATCH_DAY = 24 * 60 * 60 * 1000;
