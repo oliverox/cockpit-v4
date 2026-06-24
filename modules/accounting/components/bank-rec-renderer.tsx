@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useMutation, useQuery } from "convex/react";
-import { Loader2, RotateCcw, Upload } from "lucide-react";
+import { useAction, useMutation, useQuery } from "convex/react";
+import { Loader2, RotateCcw, Sparkles, Upload } from "lucide-react";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import type { TaskRendererProps } from "@/modules/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -37,6 +38,10 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
   const createBankAccount = useMutation(
     api.modules.accounting.bankAccounts.createBankAccount,
   );
+  const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
+  const extractStatement = useAction(
+    api.modules.accounting.extract.extractStatement,
+  );
 
   const server = (task.payload ?? {}) as BankRecPayload;
   const posted = task.status === "firm_approved";
@@ -56,6 +61,23 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
   const [newBank, setNewBank] = useState<{ name: string; code: string } | null>(
     null,
   );
+  const [extracting, setExtracting] = useState(false);
+  // Statement metadata (set by AI PDF extraction; persisted with the payload).
+  const [meta, setMeta] = useState<{
+    sourceFormat?: "csv" | "pdf";
+    bankName?: string;
+    statementCurrency?: string;
+    periodLabel?: string;
+    openingBalance?: number;
+    closingBalance?: number;
+  }>({
+    sourceFormat: server.sourceFormat,
+    bankName: server.bankName,
+    statementCurrency: server.statementCurrency,
+    periodLabel: server.periodLabel,
+    openingBalance: server.openingBalance,
+    closingBalance: server.closingBalance,
+  });
 
   const contraCode = (bankAccounts ?? []).find(
     (b) => b._id === bankAccountId,
@@ -101,6 +123,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
       statementFileHash: hash,
       lines,
       matches,
+      ...meta,
       ...next,
     };
     const dates = merged.lines.map((l) => l.date);
@@ -111,6 +134,13 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
 
   async function onFile(file: File) {
     setError(null);
+    setNotice(null);
+    const isPdf =
+      file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+    if (isPdf) {
+      await extractPdf(file);
+      return;
+    }
     try {
       const text = await file.text();
       const res = parseStatementCsv(text);
@@ -119,6 +149,57 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
       setHash(hashText(text));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /** Upload a PDF to storage, then have Claude extract it (Phase 3c). */
+  async function extractPdf(file: File) {
+    setExtracting(true);
+    setError(null);
+    try {
+      const url = await generateUploadUrl();
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": file.type || "application/pdf" },
+        body: file,
+      });
+      if (!res.ok) throw new Error("Upload failed — try again.");
+      const { storageId } = (await res.json()) as { storageId: string };
+      const out = await extractStatement({
+        taskId,
+        storageId: storageId as Id<"_storage">,
+        fileName: file.name,
+      });
+      const nextMeta = {
+        sourceFormat: "pdf" as const,
+        bankName: out.meta.bankName,
+        statementCurrency: out.meta.currency,
+        periodLabel: out.meta.period,
+        openingBalance: out.meta.openingBalance,
+        closingBalance: out.meta.closingBalance,
+      };
+      setLines(out.lines);
+      setMatches([]);
+      setMeta(nextMeta);
+      setHash(out.fileHash);
+      await persist({
+        lines: out.lines,
+        matches: [],
+        statementFileHash: out.fileHash,
+        ...nextMeta,
+      });
+      const skip =
+        out.skipped.length > 0 ? ` ${out.skipped.length} row(s) skipped.` : "";
+      const trunc = out.truncated
+        ? " Output was truncated — double-check the last rows."
+        : "";
+      setNotice(
+        `AI extracted ${out.lines.length} transactions from the PDF — review each line before posting.${skip}${trunc}`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExtracting(false);
     }
   }
 
@@ -132,6 +213,16 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     setError(null);
     setLines(mapped);
     setMatches([]);
+    // Clear any prior PDF-extraction metadata — this is a CSV import now.
+    const csvMeta = {
+      sourceFormat: "csv" as const,
+      bankName: undefined,
+      statementCurrency: undefined,
+      periodLabel: undefined,
+      openingBalance: undefined,
+      closingBalance: undefined,
+    };
+    setMeta(csvMeta);
     setParsed(null);
     setColumnMap(null);
     if (skipped.length > 0) {
@@ -148,7 +239,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     } else {
       setNotice(null);
     }
-    void persist({ lines: mapped, matches: [] });
+    void persist({ lines: mapped, matches: [], ...csvMeta });
   }
 
   /** Set a line's treatment from the unified dropdown: "match:<ledgerId>",
@@ -361,13 +452,18 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
       {/* Upload + column map (when no lines yet) */}
       {editable && lines.length === 0 && !posted && (
         <section className="mt-6 space-y-3">
-          {!parsed ? (
+          {extracting ? (
+            <div className="flex items-center gap-2 rounded-xl border border-dashed border-line-2 bg-card-tint/40 px-6 py-8 text-sm text-ink-3">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Extracting transactions from the PDF with AI…
+            </div>
+          ) : !parsed ? (
             <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-line-2 bg-card-tint/40 px-6 py-8 text-sm text-ink-3 hover:bg-card-tint">
               <Upload className="h-4 w-4" />
-              Upload a bank statement CSV
+              Upload a bank statement — CSV or PDF
               <input
                 type="file"
-                accept=".csv,text/csv"
+                accept=".csv,.pdf,text/csv,application/pdf"
                 className="hidden"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -459,6 +555,45 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
           )}
         </section>
       )}
+
+      {/* Statement metadata (AI-extracted PDF or captured balances) */}
+      {lines.length > 0 &&
+        (meta.sourceFormat === "pdf" ||
+          meta.bankName ||
+          meta.openingBalance !== undefined ||
+          meta.closingBalance !== undefined) && (
+          <section className="mt-6 rounded-xl border border-line bg-card-tint/40 px-4 py-3 text-[12px] text-ink-2">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              {meta.sourceFormat === "pdf" && (
+                <span className="inline-flex items-center gap-1 font-medium text-fmu-navy">
+                  <Sparkles className="h-3.5 w-3.5" /> AI-extracted from PDF —
+                  review each line
+                </span>
+              )}
+              {meta.bankName && <span>{meta.bankName}</span>}
+              {meta.periodLabel && <span>{meta.periodLabel}</span>}
+              {meta.statementCurrency && (
+                <span className="num">{meta.statementCurrency}</span>
+              )}
+              {meta.openingBalance !== undefined && (
+                <span>
+                  Opening{" "}
+                  <span className="num">
+                    {formatAmount(meta.openingBalance)}
+                  </span>
+                </span>
+              )}
+              {meta.closingBalance !== undefined && (
+                <span>
+                  Closing{" "}
+                  <span className="num">
+                    {formatAmount(meta.closingBalance)}
+                  </span>
+                </span>
+              )}
+            </div>
+          </section>
+        )}
 
       {/* Categorize / review */}
       {lines.length > 0 && (

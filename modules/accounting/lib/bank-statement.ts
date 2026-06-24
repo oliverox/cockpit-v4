@@ -261,6 +261,16 @@ export type BankRecPayload = {
   lines: StatementLine[];
   /** Lines matched to existing ledger entries (vs categorized as new). */
   matches?: LineMatch[];
+  /** How the lines were ingested (Phase 3c). */
+  sourceFormat?: "csv" | "pdf";
+  /** Statement-level metadata captured during AI PDF extraction (Phase 3c).
+   *  bankName/currency/period are informational; the balances feed the
+   *  variance-to-zero reconciliation statement (Phase 3c-ii). */
+  bankName?: string;
+  statementCurrency?: string;
+  periodLabel?: string;
+  openingBalance?: number;
+  closingBalance?: number;
 };
 
 /** djb2 string hash → short base36 string. */
@@ -367,4 +377,150 @@ export function suggestExactMatches(
     }
   }
   return out;
+}
+
+// ── AI PDF extraction (Phase 3c) ────────────────────────────────────────
+// The model returns this shape (ported ~verbatim from cockpit-v3's
+// reconciliationProcessor extraction prompt). Parsing + mapping are pure and
+// shared with the Convex Node action that calls Anthropic, so they're testable
+// without the network and reused if a CSV path ever wants the same mapping.
+
+export type ExtractedTxn = {
+  date: string;
+  description: string;
+  amount: number;
+  type?: string;
+  reference?: string;
+};
+
+export type ExtractedStatement = {
+  openingBalance?: number;
+  closingBalance?: number;
+  currency?: string;
+  period?: string;
+  accountName?: string;
+  bankName?: string;
+  transactions: ExtractedTxn[];
+};
+
+function asNumberOrUndef(v: unknown): number | undefined {
+  if (typeof v === "number" && isFinite(v)) return v;
+  if (typeof v === "string" && v.trim()) {
+    const n = parseAmount(v);
+    return n === 0 && !/\d/.test(v) ? undefined : n;
+  }
+  return undefined;
+}
+
+/** Coerce a parsed blob into ExtractedStatement, tolerating missing fields. */
+function normalizeStatement(raw: unknown): ExtractedStatement {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const txns = Array.isArray(o.transactions) ? o.transactions : [];
+  return {
+    openingBalance: asNumberOrUndef(o.openingBalance),
+    closingBalance: asNumberOrUndef(o.closingBalance),
+    currency: typeof o.currency === "string" ? o.currency : undefined,
+    period: typeof o.period === "string" ? o.period : undefined,
+    accountName: typeof o.accountName === "string" ? o.accountName : undefined,
+    bankName: typeof o.bankName === "string" ? o.bankName : undefined,
+    transactions: txns as ExtractedTxn[],
+  };
+}
+
+/**
+ * Strip markdown fences, repair brace/bracket truncation, then JSON.parse —
+ * mirrors cockpit-v3's extraction parsing so a `max_tokens`-truncated response
+ * still yields the transactions captured so far. Throws if unrecoverable.
+ */
+export function parseExtractionJson(text: string): ExtractedStatement {
+  const raw = (text ?? "").trim();
+  if (!raw) throw new Error("AI returned no text.");
+  // The prompt forbids fences, so the common case is raw JSON — try it first,
+  // then a line-based fence strip (safe even if a string value contains ```).
+  const stripped = raw
+    .replace(/^```(?:json)?[ \t]*\r?\n?/, "")
+    .replace(/\r?\n?```[ \t]*$/, "")
+    .trim();
+  for (const c of stripped === raw ? [raw] : [raw, stripped]) {
+    try {
+      return normalizeStatement(JSON.parse(c));
+    } catch {
+      /* fall through to repair */
+    }
+  }
+  // Truncation repair for a max_tokens cut — string-literal-aware so a literal
+  // '}' or ']' inside a description never confuses the cut point or the count.
+  return normalizeStatement(JSON.parse(repairTruncatedJson(stripped)));
+}
+
+/**
+ * Close JSON truncated mid-stream: scan honoring string literals + escapes,
+ * find the last structural '}' / ']', cut there, and append the brackets still
+ * open at that point (innermost first). Throws if there's no complete value.
+ */
+function repairTruncatedJson(s: string): string {
+  let inStr = false;
+  let esc = false;
+  const stack: ("{" | "[")[] = [];
+  let cut = -1;
+  let remaining: ("{" | "[")[] = [];
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{" || ch === "[") stack.push(ch);
+    else if (ch === "}") {
+      if (stack[stack.length - 1] === "{") stack.pop();
+      cut = i;
+      remaining = [...stack];
+    } else if (ch === "]") {
+      if (stack[stack.length - 1] === "[") stack.pop();
+      cut = i;
+      remaining = [...stack];
+    }
+  }
+  if (cut === -1) throw new Error("AI returned no usable JSON.");
+  let out = s.slice(0, cut + 1);
+  for (let i = remaining.length - 1; i >= 0; i--) {
+    out += remaining[i] === "{" ? "}" : "]";
+  }
+  return out;
+}
+
+/**
+ * Map an extracted statement to v4 StatementLine[]. Dates parsed UTC-deterministic
+ * (reuses parseStatementDate — the model is told to emit YYYY-MM-DD); amount is a
+ * single signed number (negative = outflow). Unreadable-date / zero-amount rows
+ * are surfaced as skipped, never silently dropped.
+ */
+export function mapExtractedToLines(stmt: ExtractedStatement): MapResult {
+  const lines: StatementLine[] = [];
+  const skipped: { reason: string }[] = [];
+  (stmt.transactions ?? []).forEach((t, i) => {
+    const date = parseStatementDate(String(t?.date ?? ""));
+    const amount = asNumberOrUndef(t?.amount) ?? 0;
+    const base = String(t?.description ?? "").trim() || String(t?.type ?? "").trim();
+    const ref = String(t?.reference ?? "").trim();
+    const description = ref ? `${base} (ref ${ref})` : base;
+    if (date === null) {
+      skipped.push({ reason: "unreadable date" });
+      return;
+    }
+    if (amount === 0) {
+      skipped.push({ reason: "zero amount" });
+      return;
+    }
+    lines.push({
+      rowHash: `x${hashText(JSON.stringify(t))}_${i}`,
+      date,
+      description,
+      signedAmount: amount,
+    });
+  });
+  return { lines, skipped };
 }
