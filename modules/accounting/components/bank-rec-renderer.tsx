@@ -82,6 +82,10 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     effectiveMatchGroups(server),
   );
   const [hash, setHash] = useState(server.statementFileHash ?? "");
+  // CSV hash is computed at parse time but only committed to `hash` on import,
+  // so cancelling the column-map step never leaves a hash for an un-imported
+  // file (which would weaken finalize's duplicate-import guard).
+  const [pendingHash, setPendingHash] = useState("");
   const [parsed, setParsed] = useState<Parsed | null>(null);
   const [columnMap, setColumnMap] = useState<ColumnMap | null>(null);
   const [step, setStep] = useState<WizardStep>(
@@ -126,17 +130,6 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
   useEffect(() => {
     setAckVariance(false);
   }, [lines, matchGroups, meta.openingBalance, meta.closingBalance]);
-
-  // When an AI auto-match run lands server-side, adopt the server's merged
-  // groups (manual groups preserved + AI groups added). Keyed on the run
-  // timestamp so manual edits between runs are never clobbered.
-  const aiRanAt = server.aiMatch?.ranAt;
-  useEffect(() => {
-    if (aiRanAt !== undefined) {
-      setMatchGroups(effectiveMatchGroups(server));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiRanAt]);
 
   const contraCode = (bankAccounts ?? []).find(
     (b) => b._id === bankAccountId,
@@ -199,7 +192,13 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
   )?.name;
 
   async function persist(next?: Partial<BankRecPayload>) {
+    // Base on the server payload so fields this wizard doesn't model
+    // (aiMatch, ledgerSource/modeAVariant, ledgerTxns + cashbook*) survive a
+    // save; the locally-managed fields below override it. (Single-editor
+    // assumption: local state is only seeded once from the server — a second
+    // concurrent editor's changes are last-writer-wins.)
     const merged: BankRecPayload = {
+      ...server,
       bankAccountId,
       statementFileHash: hash,
       lines,
@@ -214,7 +213,15 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     const dates = merged.lines.map((l) => l.date);
     merged.periodStart = dates.length ? Math.min(...dates) : undefined;
     merged.periodEnd = dates.length ? Math.max(...dates) : undefined;
-    await updateTask({ taskId, payload: merged });
+    try {
+      await updateTask({ taskId, payload: merged });
+    } catch (e) {
+      // Surface the failure (e.g. payload over Convex's 1MB limit) — local
+      // state already reflects the edit, so without this the save looks done.
+      setError(
+        e instanceof Error ? `Couldn't save — ${e.message}` : "Couldn't save your changes.",
+      );
+    }
   }
 
   function goStep(s: WizardStep) {
@@ -239,7 +246,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
       const res = parseStatementCsv(text);
       setParsed(res);
       setColumnMap(guessColumnMap(res.headers));
-      setHash(hashText(text));
+      setPendingHash(hashText(text));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -311,6 +318,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     setError(null);
     setLines(mapped);
     setMatchGroups([]);
+    setHash(pendingHash);
     const csvMeta = {
       sourceFormat: "csv" as const,
       bankName: undefined,
@@ -338,17 +346,22 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     } else {
       setNotice(null);
     }
-    void persist({ lines: mapped, matchGroups: [], ...csvMeta });
+    void persist({
+      lines: mapped,
+      matchGroups: [],
+      statementFileHash: pendingHash,
+      ...csvMeta,
+    });
   }
 
   function removeLine(rowHash: string) {
     const nextLines = lines.filter((l) => l.rowHash !== rowHash);
-    const nextGroups = matchGroups
-      .map((g) => ({
-        ...g,
-        bankRowHashes: g.bankRowHashes.filter((h) => h !== rowHash),
-      }))
-      .filter((g) => g.bankRowHashes.length > 0);
+    // A removed line that belonged to a group invalidates the WHOLE group (its
+    // ledger side balanced against the full bank side), so drop the group
+    // entirely — releasing its ledger refs — never leave a partial split.
+    const nextGroups = matchGroups.filter(
+      (g) => !g.bankRowHashes.includes(rowHash),
+    );
     setLines(nextLines);
     setMatchGroups(nextGroups);
     void persist({ lines: nextLines, matchGroups: nextGroups });
@@ -374,9 +387,31 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     Math.abs(selBankSigned - selLedgerSigned) <= 0.02;
 
   function createMatch() {
-    if (!selBalances) return;
-    const bankRowHashes = [...selBank];
-    const ledgerRefs = [...selLedger];
+    // Re-validate the selection against LIVE claims (an AI run between selecting
+    // and clicking could have claimed one of these), then re-check the balance.
+    const bankRowHashes = [...selBank].filter((h) => !matchedBankHashes.has(h));
+    const ledgerRefs = [...selLedger].filter((id) => !claimedLedger.has(id));
+    if (bankRowHashes.length === 0 || ledgerRefs.length === 0) {
+      setSelBank(new Set());
+      setSelLedger(new Set());
+      return;
+    }
+    const bankSigned = round2(
+      bankRowHashes.reduce(
+        (s, h) => round2(s + (lineByHash.get(h)?.signedAmount ?? 0)),
+        0,
+      ),
+    );
+    const ledgerSigned = round2(
+      ledgerRefs.reduce(
+        (s, id) => round2(s + (candById.get(id)?.signedAmount ?? 0)),
+        0,
+      ),
+    );
+    if (Math.abs(bankSigned - ledgerSigned) > 0.02) {
+      setError("Selected bank and ledger amounts don't match — adjust your selection.");
+      return;
+    }
     const group: MatchGroup = {
       groupId:
         typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -454,12 +489,20 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
       // Persist current manual matches so the action's gate reads the latest.
       await persist();
       const out = await aiMatch({ taskId });
-      // The aiRanAt effect adopts the server's merged groups on next render.
+      // Adopt the server's merged groups SYNCHRONOUSLY (the action returns them)
+      // rather than waiting for the reactive aiRanAt effect — a persist in that
+      // window would otherwise clobber the freshly-written AI groups. Clear any
+      // stale selection too.
+      if (out.groups) setMatchGroups(out.groups);
+      setSelBank(new Set());
+      setSelLedger(new Set());
       if (out.matched > 0) {
         setNotice(
           `AI matched ${out.matched} group(s). ${out.unmatchedBank} bank + ${out.unmatchedLedger} ledger still unmatched.` +
             (out.truncated ? " Output was truncated — run again to continue." : "") +
-            (out.candidateCapped ? " (ledger candidate list was capped)" : ""),
+            (out.candidateCapped || out.bankCapped
+              ? " (only the most recent transactions were sent — match the rest manually)"
+              : ""),
         );
       } else {
         setNotice(out.note ?? "No further matches found — resolve the rest manually.");
@@ -473,8 +516,19 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
 
   // ── Bank account ───────────────────────────────────────────────────
   async function chooseBank(id: string) {
+    // Switching accounts invalidates existing groups — their ledger refs are
+    // entries on the OLD contra account (finalize would reject them). Clear the
+    // groups + any selection so the user re-matches against the new account.
+    const clear = id !== bankAccountId && matchGroups.length > 0;
     setBankAccountId(id);
-    await persist({ bankAccountId: id });
+    if (clear) {
+      setMatchGroups([]);
+      setSelBank(new Set());
+      setSelLedger(new Set());
+      await persist({ bankAccountId: id, matchGroups: [] });
+    } else {
+      await persist({ bankAccountId: id });
+    }
   }
 
   async function addBankAccount() {
@@ -620,6 +674,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
               <div className="flex flex-wrap items-end gap-2 rounded-lg border border-line bg-card p-3">
                 <Labeled label="Name">
                   <input
+                    aria-label="New bank account name"
                     value={newBank.name}
                     onChange={(e) => setNewBank({ ...newBank, name: e.target.value })}
                     placeholder="MCB current"
@@ -628,6 +683,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
                 </Labeled>
                 <Labeled label="Ledger (bank) account">
                   <select
+                    aria-label="Ledger (bank) account for the new bank account"
                     value={newBank.code}
                     onChange={(e) => setNewBank({ ...newBank, code: e.target.value })}
                     className="rounded border border-line bg-card px-2 py-1 text-sm outline-none focus:border-fmu-navy"
@@ -654,6 +710,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
             ) : (
               <div className="flex items-center gap-2">
                 <select
+                  aria-label="Bank account"
                   value={bankAccountId}
                   onChange={(e) => void chooseBank(e.target.value)}
                   className="rounded border border-line bg-card px-2 py-1.5 text-sm outline-none focus:border-fmu-navy"
@@ -752,15 +809,17 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
                 </div>
               </div>
             ) : (
-              <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-line-2 bg-card-tint/40 px-6 py-8 text-sm text-ink-3 hover:bg-card-tint">
+              <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-line-2 bg-card-tint/40 px-6 py-8 text-sm text-ink-3 hover:bg-card-tint focus-within:border-fmu-navy focus-within:ring-2 focus-within:ring-fmu-navy/30">
                 <Upload className="h-4 w-4" />
                 {lines.length > 0
                   ? "Replace the statement — upload a CSV or PDF"
                   : "Upload a bank statement — CSV or PDF"}
+                {/* sr-only (not hidden) keeps the input in the tab order so the
+                    upload is reachable by keyboard. */}
                 <input
                   type="file"
                   accept=".csv,.pdf,text/csv,application/pdf"
-                  className="hidden"
+                  className="sr-only"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) void onFile(f);
@@ -932,6 +991,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
                           <span className="pill pill--balanced">matched</span>
                         ) : (
                           <select
+                            aria-label={`Category for ${l.description} (${fmtSigned(l.signedAmount)})`}
                             value={l.accountCode ? `cat:${l.accountCode}` : ""}
                             onChange={(e) =>
                               categorize(
@@ -967,7 +1027,11 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
                 Ledger (unreconciled)
               </div>
               <div className="divide-y divide-line rounded-xl border border-line bg-card">
-                {candidates.length === 0 ? (
+                {candidatesQ === undefined ? (
+                  <div className="px-3 py-6 text-center text-[12px] text-ink-4">
+                    Loading ledger entries…
+                  </div>
+                ) : candidates.length === 0 ? (
                   <div className="px-3 py-6 text-center text-[12px] text-ink-4">
                     No unreconciled ledger entries.
                   </div>
@@ -1491,6 +1555,7 @@ function BalanceField({
       </span>
       {editable ? (
         <input
+          aria-label={label}
           inputMode="decimal"
           value={strValue}
           onChange={(e) => onChange(e.target.value)}
@@ -1534,6 +1599,7 @@ function ColumnSelect({
   return (
     <Labeled label={label}>
       <select
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="rounded border border-line bg-card px-2 py-1 text-xs outline-none focus:border-fmu-navy"

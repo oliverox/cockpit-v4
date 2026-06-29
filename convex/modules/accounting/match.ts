@@ -88,6 +88,10 @@ type AiMatchActionResult = {
   unmatchedLedger: number;
   truncated: boolean;
   candidateCapped: boolean;
+  bankCapped: boolean;
+  /** The full merged group set after this run (manual + all AI). Returned so
+   *  the renderer adopts it synchronously, not via the reactive effect. */
+  groups?: MatchGroup[];
   note?: string;
 };
 
@@ -96,11 +100,7 @@ export const aiMatch = action({
   // Explicit return type: this action calls internal.* (which includes itself),
   // so without an annotation the inferred type is circular and resolves to any.
   handler: async (ctx, args): Promise<AiMatchActionResult> => {
-    // Authorize + cap BEFORE spending on the model.
-    const gate = await ctx.runQuery(
-      internal.modules.accounting.matchInternal.gateMatch,
-      { taskId: args.taskId },
-    );
+    // getMatchInputs authorizes (firm-only, editable bank-rec) before reading.
     const inputs = await ctx.runQuery(
       internal.modules.accounting.matchInternal.getMatchInputs,
       { taskId: args.taskId },
@@ -113,9 +113,18 @@ export const aiMatch = action({
         unmatchedLedger: inputs.ledgerCandidates.length,
         truncated: false,
         candidateCapped: inputs.candidateCapped,
+        bankCapped: inputs.bankCapped,
         note: "Nothing left to auto-match.",
       };
     }
+
+    // Reserve a cost slot BEFORE the paid call — atomic per-workspace hourly
+    // cap that counts even if the call below fails (refusal / parse error /
+    // post race). The id is patched with token usage on success.
+    const { auditId } = await ctx.runMutation(
+      internal.modules.accounting.matchInternal.reserveMatch,
+      { taskId: args.taskId },
+    );
 
     const anthropic = new Anthropic();
     const stream = anthropic.messages.stream({
@@ -190,7 +199,7 @@ export const aiMatch = action({
     ).length;
     const truncated = message.stop_reason === "max_tokens";
 
-    await ctx.runMutation(
+    const saved = await ctx.runMutation(
       internal.modules.accounting.matchInternal.saveMatchResult,
       {
         taskId: args.taskId,
@@ -206,12 +215,9 @@ export const aiMatch = action({
       },
     );
     await ctx.runMutation(
-      internal.modules.accounting.matchInternal.logMatch,
+      internal.modules.accounting.matchInternal.recordMatchUsage,
       {
-        workspaceId: gate.workspaceId,
-        customerId: gate.customerId,
-        taskId: args.taskId,
-        actorId: gate.actorId,
+        auditId,
         model: MODEL,
         inputTokens: message.usage.input_tokens,
         outputTokens: message.usage.output_tokens,
@@ -220,11 +226,14 @@ export const aiMatch = action({
     );
 
     return {
-      matched: groups.length,
+      // What was actually persisted (collisions with existing claims dropped).
+      matched: saved.saved,
       unmatchedBank,
       unmatchedLedger,
       truncated,
       candidateCapped: inputs.candidateCapped,
+      bankCapped: inputs.bankCapped,
+      groups: saved.matchGroups,
     };
   },
 });
