@@ -251,6 +251,40 @@ export type MatchCandidate = {
   signedAmount: number;
 };
 
+/**
+ * One logical match between bank statement line(s) and ledger reference(s)
+ * (supersedes the 1:1 LineMatch, supporting one-to-many / many-to-one splits).
+ *  - `bankRowHashes`: the statement line(s) on the bank side.
+ *  - `ledgerRefs`: Mode B → existing ledger entry `_id`s; Mode A → LedgerTxn ids.
+ *  - `source`: how the group was formed; AI groups must still pass finalize's
+ *    server-side balance assertions before any ledger entry is flipped.
+ */
+export type MatchGroup = {
+  groupId: string;
+  bankRowHashes: string[];
+  ledgerRefs: string[];
+  source: "exact" | "manual" | "ai";
+  confidence?: "exact" | "probable";
+  /** AI rationale (notes from the matching model), for display only. */
+  reason?: string;
+};
+
+/**
+ * A cashbook line uploaded as the ledger side in Mode A (`ledgerSource:
+ * "cashbook"`). Lives only in task.payload until finalize imports it into the
+ * double-entry ledger. `accountCode` is the category assigned in review; when
+ * absent, the import posts it to SUSPENSE_CODE.
+ */
+export type LedgerTxn = {
+  /** Stable id within the payload (used as a MatchGroup ledgerRef in Mode A). */
+  id: string;
+  date: number;
+  description: string;
+  /** Positive = money in, negative = money out (same convention as lines). */
+  signedAmount: number;
+  accountCode?: string;
+};
+
 /** The accounting.bank_rec task's draft payload (opaque to core). */
 export type BankRecPayload = {
   /** accounting_bank_accounts id (stringified — opaque in the payload). */
@@ -259,8 +293,34 @@ export type BankRecPayload = {
   periodStart?: number;
   periodEnd?: number;
   lines: StatementLine[];
-  /** Lines matched to existing ledger entries (vs categorized as new). */
+  /** Legacy 1:1 matches (Phase 3b). Read through `lineMatchesToGroups` so
+   *  finalize has a single match-group code path; new matches go in
+   *  `matchGroups` below. */
   matches?: LineMatch[];
+  /** Match groups (splits + AI), supersede `matches`. */
+  matchGroups?: MatchGroup[];
+  /** Which side the ledger comes from. "existing" = the Convex ledger (Mode B,
+   *  default); "cashbook" = an uploaded ledger file (Mode A). */
+  ledgerSource?: "existing" | "cashbook";
+  /** Mode A posting behaviour. "import" (v3-faithful) posts the cashbook into
+   *  the ledger; "report" posts nothing but explicitly-recorded items. */
+  modeAVariant?: "import" | "report";
+  /** Wizard cursor (the 4-step stepper). */
+  step?: "bank" | "ledger" | "reconcile" | "report";
+  /** Mode A: the uploaded cashbook side + its hash and balances. */
+  ledgerTxns?: LedgerTxn[];
+  cashbookFileHash?: string;
+  cashbookOpening?: number;
+  cashbookClosing?: number;
+  /** Metadata from the last AI auto-match run (display + truncation warning). */
+  aiMatch?: {
+    ranAt: number;
+    model: string;
+    groupCount: number;
+    unmatchedBank: number;
+    unmatchedLedger: number;
+    truncated?: boolean;
+  };
   /** How the lines were ingested (Phase 3c). */
   sourceFormat?: "csv" | "pdf";
   /** Statement-level metadata captured during AI PDF extraction (Phase 3c).
@@ -338,6 +398,40 @@ export function bankRecCoverage(
     (l) => !!l.accountCode || matched.has(l.rowHash),
   ).length;
   return { total, resolved, ready: total > 0 && resolved === total };
+}
+
+/**
+ * Upgrade legacy 1:1 `LineMatch[]` payloads to singleton `MatchGroup[]`, so
+ * finalize and the renderer have a single match-group code path. Pure; the
+ * inverse is never needed (new matches are authored directly as MatchGroups).
+ */
+export function lineMatchesToGroups(matches: LineMatch[] = []): MatchGroup[] {
+  return matches.map((m) => ({
+    groupId: `g_${m.rowHash}`,
+    bankRowHashes: [m.rowHash],
+    ledgerRefs: [m.ledgerEntryId],
+    source: m.matchType === "exact" ? "exact" : "manual",
+  }));
+}
+
+/**
+ * The effective match groups for a payload: legacy `matches` upgraded to
+ * singletons, plus any `matchGroups`, de-duplicated by groupId (matchGroups
+ * win). The single source of truth both the renderer and finalize read.
+ */
+export function effectiveMatchGroups(p: {
+  matches?: LineMatch[];
+  matchGroups?: MatchGroup[];
+}): MatchGroup[] {
+  const groups = lineMatchesToGroups(p.matches);
+  const seen = new Set(groups.map((g) => g.groupId));
+  for (const g of p.matchGroups ?? []) {
+    if (!seen.has(g.groupId)) {
+      seen.add(g.groupId);
+      groups.push(g);
+    }
+  }
+  return groups;
 }
 
 export type BankRecVariance = {

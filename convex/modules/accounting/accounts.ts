@@ -11,7 +11,11 @@ import {
   type Actor,
 } from "../../lib/auth";
 import { accountType } from "./schema";
-import { DEFAULT_COA } from "../../../modules/accounting/lib/default-coa";
+import {
+  DEFAULT_COA,
+  SUSPENSE_CODE,
+  SUSPENSE_NAME,
+} from "../../../modules/accounting/lib/default-coa";
 
 /**
  * Chart of Accounts CRUD for the Accounting module (Phase 1).
@@ -374,5 +378,48 @@ export const importDefaultCoa = mutation({
         : {}),
     });
     return { created, skipped };
+  },
+});
+
+/**
+ * Ensure the Suspense / Clearing account (SUSPENSE_CODE) exists for a customer.
+ * Idempotent: a no-op if already present. Bank reconciliation calls this when a
+ * Mode A cashbook import may post uncategorized lines, so the finalize handler
+ * can rely on the code existing (it asserts, never creates — account creation
+ * isn't a reversible side-effect, and Suspense is shared across batches).
+ * Returns the code so callers can use it without re-deriving the constant.
+ */
+export const ensureSuspenseAccount = mutation({
+  args: { customerId: v.id("customers") },
+  handler: async (ctx, args) => {
+    const actor = await getActor(ctx);
+    const customer = await ctx.db.get(args.customerId);
+    if (!customer) throw new Error("Customer not found");
+    await assertCanWrite(ctx, actor, args.customerId, customer.workspaceId);
+
+    const existing = await ctx.db
+      .query("accounting_accounts")
+      .withIndex("by_customer_and_code", (q) =>
+        q.eq("customerId", args.customerId).eq("code", SUSPENSE_CODE),
+      )
+      .first();
+    if (existing) return { code: SUSPENSE_CODE, created: false };
+
+    const id = await ctx.db.insert("accounting_accounts", {
+      workspaceId: customer.workspaceId,
+      customerId: args.customerId,
+      code: SUSPENSE_CODE,
+      name: SUSPENSE_NAME,
+      type: "asset",
+      parentCode: "10000",
+    });
+    await logAccountAudit(ctx, {
+      workspaceId: customer.workspaceId,
+      actor,
+      subjectId: id,
+      action: "create",
+      after: { code: SUSPENSE_CODE, name: SUSPENSE_NAME, type: "asset" },
+    });
+    return { code: SUSPENSE_CODE, created: true };
   },
 });
