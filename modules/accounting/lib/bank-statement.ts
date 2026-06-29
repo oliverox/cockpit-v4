@@ -499,6 +499,64 @@ export function bankRecVariance(
   };
 }
 
+export type FixItem = {
+  date: number;
+  description: string;
+  /** Signed adjustment to the ledger needed to close the variance. */
+  amount: number;
+  fixAction?: string;
+};
+
+export type ReconcileToZero = {
+  /** The reconciling items, possibly with an appended rounding adjustment. */
+  items: FixItem[];
+  /** bankClosing − (ledgerClosing + Σ items) before any auto-correction. */
+  residual: number;
+  /** Whether the statement ties out after folding in the residual. */
+  tied: boolean;
+};
+
+/**
+ * Two-sided reconciliation tie-out (Mode A — bank statement vs cashbook),
+ * ported from cockpit-v3. Given both stated closing balances and the signed
+ * reconciling items (unmatched on either side, each signed as the ledger
+ * adjustment needed), confirm bankClosing == ledgerClosing + Σ items; if a
+ * residual remains (opening drift / cumulative rounding) fold it into an
+ * existing rounding item or append one, so fixing all items reaches $0.00. Pure.
+ */
+export function reconcileToZero(
+  bankClosing: number,
+  ledgerClosing: number,
+  items: FixItem[],
+): ReconcileToZero {
+  // Sign-symmetric round to 2dp (no negative zero).
+  const round = (n: number) => {
+    const r = Math.round(Math.abs(n) * 100 + 1e-9) / 100;
+    return n < 0 && r !== 0 ? -r : r;
+  };
+  const sum = round(items.reduce((s, i) => s + i.amount, 0));
+  const residual = round(bankClosing - (ledgerClosing + sum));
+  if (Math.abs(residual) <= 0.005) return { items, residual: 0, tied: true };
+  const rounding = items.find((i) =>
+    /rounding|adjustment|discrepancy|residual/i.test(i.description),
+  );
+  const next = rounding
+    ? items.map((i) =>
+        i === rounding ? { ...i, amount: round(i.amount + residual) } : i,
+      )
+    : [
+        ...items,
+        {
+          date: items[0]?.date ?? 0,
+          description: "Rounding adjustment",
+          amount: round(residual),
+          fixAction:
+            "Acknowledge: cumulative rounding difference across matched transactions",
+        },
+      ];
+  return { items: next, residual, tied: true };
+}
+
 const MATCH_DAY = 24 * 60 * 60 * 1000;
 
 /**

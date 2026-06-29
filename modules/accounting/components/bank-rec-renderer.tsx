@@ -24,6 +24,8 @@ import { round2 } from "@/modules/accounting/lib/journal-entry";
 import {
   type BankRecPayload,
   type ColumnMap,
+  type FixItem,
+  type LedgerTxn,
   type MatchGroup,
   type StatementLine,
   bankRecVariance,
@@ -33,6 +35,7 @@ import {
   mapRowsToLines,
   parseAmount,
   parseStatementCsv,
+  reconcileToZero,
   suggestExactMatches,
 } from "@/modules/accounting/lib/bank-statement";
 
@@ -71,6 +74,9 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     api.modules.accounting.extract.extractStatement,
   );
   const aiMatch = useAction(api.modules.accounting.match.aiMatch);
+  const ensureSuspense = useMutation(
+    api.modules.accounting.accounts.ensureSuspenseAccount,
+  );
 
   const server = (task.payload ?? {}) as BankRecPayload;
   const posted = task.status === "firm_approved";
@@ -126,10 +132,45 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
   );
   const [ackVariance, setAckVariance] = useState(false);
 
+  // ── Mode A (uploaded cashbook as the ledger side) ──
+  const [ledgerSource, setLedgerSource] = useState<"existing" | "cashbook">(
+    server.ledgerSource ?? "existing",
+  );
+  const [ledgerTxns, setLedgerTxns] = useState<LedgerTxn[]>(
+    server.ledgerTxns ?? [],
+  );
+  const [cashbookHash, setCashbookHash] = useState(server.cashbookFileHash ?? "");
+  const [cashbookPendingHash, setCashbookPendingHash] = useState("");
+  const [cashbookParsed, setCashbookParsed] = useState<Parsed | null>(null);
+  const [cashbookColumnMap, setCashbookColumnMap] = useState<ColumnMap | null>(
+    null,
+  );
+  const [extractingCashbook, setExtractingCashbook] = useState(false);
+  const [cashbookMeta, setCashbookMeta] = useState<{
+    opening?: number;
+    closing?: number;
+    bankName?: string;
+    period?: string;
+  }>({ opening: server.cashbookOpening, closing: server.cashbookClosing });
+  const [cashbookOpeningStr, setCashbookOpeningStr] = useState(
+    server.cashbookOpening != null ? String(server.cashbookOpening) : "",
+  );
+  const [cashbookClosingStr, setCashbookClosingStr] = useState(
+    server.cashbookClosing != null ? String(server.cashbookClosing) : "",
+  );
+  const modeA = ledgerSource === "cashbook";
+
   // A line / match / balance edit invalidates a prior variance acknowledgement.
   useEffect(() => {
     setAckVariance(false);
-  }, [lines, matchGroups, meta.openingBalance, meta.closingBalance]);
+  }, [
+    lines,
+    matchGroups,
+    ledgerTxns,
+    meta.openingBalance,
+    meta.closingBalance,
+    cashbookMeta.closing,
+  ]);
 
   const contraCode = (bankAccounts ?? []).find(
     (b) => b._id === bankAccountId,
@@ -139,11 +180,21 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
   // posted entries remain here and resolve group ledger details.
   const candidatesQ = useQuery(
     api.modules.accounting.ledger.getUnreconciledEntries,
-    contraCode && editable
+    contraCode && editable && !modeA
       ? { customerId: task.customerId, accountCode: contraCode }
       : "skip",
   );
-  const candidates: Candidate[] = candidatesQ ?? [];
+  // The match targets ("candidates"): Mode B → unreconciled Convex ledger
+  // entries; Mode A → the uploaded cashbook lines (ids are the LedgerTxn ids the
+  // match groups + finalize reference).
+  const candidates: Candidate[] = modeA
+    ? ledgerTxns.map((t) => ({
+        _id: t.id,
+        date: t.date,
+        description: t.description,
+        signedAmount: t.signedAmount,
+      }))
+    : (candidatesQ ?? []);
   const candById = useMemo(
     () => new Map(candidates.map((c) => [c._id, c])),
     [candidates],
@@ -179,7 +230,44 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     meta.openingBalance,
     meta.closingBalance,
   );
-  const varianceOk = variance.variance === null || variance.tied || ackVariance;
+
+  // Mode A two-sided reconciliation: bank closing vs cashbook closing, after the
+  // unmatched items on either side (each signed as the ledger adjustment needed).
+  const reconcileItems: FixItem[] = modeA
+    ? [
+        ...lines
+          .filter((l) => !isMatched(l))
+          .map((l) => ({
+            date: l.date,
+            description: l.description,
+            amount: l.signedAmount,
+          })),
+        ...ledgerTxns
+          .filter((t) => !claimedLedger.has(t.id))
+          .map((t) => ({
+            date: t.date,
+            description: t.description,
+            amount: -t.signedAmount,
+          })),
+      ]
+    : [];
+  const twoSided =
+    modeA && meta.closingBalance != null && cashbookMeta.closing != null
+      ? reconcileToZero(meta.closingBalance, cashbookMeta.closing, reconcileItems)
+      : null;
+
+  // Soft gate variance, unified across modes: null = unknown balances (never
+  // blocks); tied within 0.02 = ok; otherwise needs acknowledgement.
+  const gateVariance = modeA
+    ? twoSided
+      ? twoSided.residual
+      : null
+    : variance.variance;
+  const gateTied = modeA
+    ? twoSided === null || Math.abs(twoSided.residual) <= 0.02
+    : variance.tied;
+  const varianceOk = gateVariance === null || gateTied || ackVariance;
+
   const ready =
     coverageReady &&
     !!bankAccountId &&
@@ -187,6 +275,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     varianceOk;
 
   const canLeaveBank = lines.length > 0 && !!bankAccountId;
+  const canLeaveLedger = !modeA || ledgerTxns.length > 0;
   const postedBankName = (bankAccounts ?? []).find(
     (b) => b._id === (server.bankAccountId ?? bankAccountId),
   )?.name;
@@ -207,6 +296,11 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
       matches: [],
       matchGroups,
       step,
+      ledgerSource,
+      ledgerTxns,
+      cashbookFileHash: cashbookHash || undefined,
+      cashbookOpening: cashbookMeta.opening,
+      cashbookClosing: cashbookMeta.closing,
       ...meta,
       ...next,
     };
@@ -226,6 +320,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
 
   function goStep(s: WizardStep) {
     if (s !== "bank" && !canLeaveBank) return;
+    if ((s === "reconcile" || s === "report") && !canLeaveLedger) return;
     setStep(s);
     setSelBank(new Set());
     setSelLedger(new Set());
@@ -365,6 +460,158 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     setLines(nextLines);
     setMatchGroups(nextGroups);
     void persist({ lines: nextLines, matchGroups: nextGroups });
+  }
+
+  // ── Mode A: cashbook ingestion ─────────────────────────────────────
+  async function setSourceMode(src: "existing" | "cashbook") {
+    if (src === ledgerSource) return;
+    // Switching the ledger source invalidates existing matches — their refs
+    // point at the other source.
+    setLedgerSource(src);
+    setMatchGroups([]);
+    setSelBank(new Set());
+    setSelLedger(new Set());
+    if (src === "cashbook") {
+      try {
+        await ensureSuspense({ customerId: task.customerId });
+      } catch {
+        /* finalize re-asserts Suspense exists; non-fatal here */
+      }
+    }
+    await persist({ ledgerSource: src, matchGroups: [] });
+  }
+
+  async function onCashbookFile(file: File) {
+    setError(null);
+    setNotice(null);
+    const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+    if (isPdf) {
+      await extractCashbookPdf(file);
+      return;
+    }
+    try {
+      const text = await file.text();
+      const res = parseStatementCsv(text);
+      setCashbookParsed(res);
+      setCashbookColumnMap(guessColumnMap(res.headers));
+      setCashbookPendingHash(hashText(text));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function extractCashbookPdf(file: File) {
+    setExtractingCashbook(true);
+    setError(null);
+    try {
+      const url = await generateUploadUrl();
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": file.type || "application/pdf" },
+        body: file,
+      });
+      if (!res.ok) throw new Error("Upload failed — try again.");
+      const { storageId } = (await res.json()) as { storageId: string };
+      const out = await extractStatement({
+        taskId,
+        storageId: storageId as Id<"_storage">,
+        fileName: file.name,
+      });
+      const txns = out.lines.map(toLedgerTxn);
+      const next = {
+        opening: out.meta.openingBalance,
+        closing: out.meta.closingBalance,
+        bankName: out.meta.bankName,
+        period: out.meta.period,
+      };
+      setLedgerTxns(txns);
+      setMatchGroups([]);
+      setCashbookMeta(next);
+      setCashbookOpeningStr(next.opening != null ? String(next.opening) : "");
+      setCashbookClosingStr(next.closing != null ? String(next.closing) : "");
+      setCashbookHash(out.fileHash);
+      await persist({
+        ledgerTxns: txns,
+        matchGroups: [],
+        cashbookFileHash: out.fileHash,
+        cashbookOpening: next.opening,
+        cashbookClosing: next.closing,
+      });
+      setNotice(`AI extracted ${txns.length} cashbook lines — review, then reconcile.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExtractingCashbook(false);
+    }
+  }
+
+  function importCashbookParsed() {
+    if (!cashbookParsed || !cashbookColumnMap) return;
+    const { lines: mapped, skipped } = mapRowsToLines(
+      cashbookParsed.rows,
+      cashbookColumnMap,
+    );
+    if (mapped.length === 0) {
+      setError("No usable cashbook rows — check the column mapping.");
+      return;
+    }
+    const txns = mapped.map(toLedgerTxn);
+    setError(null);
+    setLedgerTxns(txns);
+    setMatchGroups([]);
+    setCashbookMeta({ opening: undefined, closing: undefined });
+    setCashbookOpeningStr("");
+    setCashbookClosingStr("");
+    setCashbookHash(cashbookPendingHash);
+    setCashbookParsed(null);
+    setCashbookColumnMap(null);
+    setNotice(
+      skipped.length > 0
+        ? `Imported ${mapped.length} cashbook rows — ${skipped.length} skipped.`
+        : null,
+    );
+    void persist({
+      ledgerTxns: txns,
+      matchGroups: [],
+      cashbookFileHash: cashbookPendingHash,
+      cashbookOpening: undefined,
+      cashbookClosing: undefined,
+    });
+  }
+
+  function categorizeCashbook(id: string, accountCode: string) {
+    const next = ledgerTxns.map((t) =>
+      t.id === id ? { ...t, accountCode: accountCode || undefined } : t,
+    );
+    setLedgerTxns(next);
+    void persist({ ledgerTxns: next });
+  }
+
+  function removeCashbookLine(id: string) {
+    const next = ledgerTxns.filter((t) => t.id !== id);
+    const nextGroups = matchGroups.filter((g) => !g.ledgerRefs.includes(id));
+    setLedgerTxns(next);
+    setMatchGroups(nextGroups);
+    void persist({ ledgerTxns: next, matchGroups: nextGroups });
+  }
+
+  function editCashbookBalance(
+    field: "opening" | "closing",
+    raw: string,
+    commit: boolean,
+  ) {
+    if (field === "opening") setCashbookOpeningStr(raw);
+    else setCashbookClosingStr(raw);
+    const t = raw.trim();
+    const value = t === "" || !/\d/.test(t) ? undefined : parseAmount(t);
+    setCashbookMeta((m) => ({ ...m, [field]: value }));
+    if (commit) {
+      void persist(
+        field === "opening"
+          ? { cashbookOpening: value }
+          : { cashbookClosing: value },
+      );
+    }
   }
 
   // ── Matching ───────────────────────────────────────────────────────
@@ -574,9 +821,9 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
         await persist(
           status === "firm_approved"
             ? {
-                varianceAtPost: variance.variance ?? undefined,
+                varianceAtPost: gateVariance ?? undefined,
                 varianceAcknowledged:
-                  variance.variance !== null && !variance.tied ? true : undefined,
+                  gateVariance !== null && !gateTied ? true : undefined,
               }
             : undefined,
         );
@@ -634,7 +881,9 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
         <nav className="mt-6 flex items-center gap-1">
           {STEPS.map((s, i) => {
             const active = s.key === step;
-            const reachable = s.key === "bank" || canLeaveBank;
+            const reachable =
+              s.key === "bank" ||
+              (canLeaveBank && (s.key === "ledger" || canLeaveLedger));
             return (
               <button
                 key={s.key}
@@ -732,6 +981,25 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
                 </Button>
               </div>
             )}
+          </div>
+
+          {/* Ledger source */}
+          <div className="space-y-2">
+            <div className="eyebrow">Ledger source</div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <SourceOption
+                active={!modeA}
+                title="Use my Cockpit ledger"
+                desc="Reconcile against the entries already posted to this bank's account."
+                onClick={() => void setSourceMode("existing")}
+              />
+              <SourceOption
+                active={modeA}
+                title="Upload a cashbook"
+                desc="Books kept elsewhere — match against an uploaded ledger file."
+                onClick={() => void setSourceMode("cashbook")}
+              />
+            </div>
           </div>
 
           {/* Upload / column map */}
@@ -853,8 +1121,8 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
         </section>
       )}
 
-      {/* ── Step 2: Ledger (Mode B preview) ── */}
-      {!posted && step === "ledger" && (
+      {/* ── Step 2: Ledger — Mode B preview ── */}
+      {!posted && step === "ledger" && !modeA && (
         <section className="mt-6 space-y-3">
           <div className="eyebrow">Ledger — unreconciled entries</div>
           <p className="text-[12px] text-ink-3">
@@ -874,6 +1142,195 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
             </div>
           ) : (
             <CandidatesTable rows={candidates} claimed={claimedLedger} />
+          )}
+        </section>
+      )}
+
+      {/* ── Step 2: Ledger — Mode A cashbook upload ── */}
+      {!posted && step === "ledger" && modeA && (
+        <section className="mt-6 space-y-5">
+          <div className="space-y-2">
+            <div className="eyebrow">Cashbook</div>
+            <p className="text-[12px] text-ink-3">
+              Upload your company's cashbook for this account. On approval each
+              line imports into the ledger; lines you don't match to the bank
+              statement import as outstanding items. Uncategorized lines post to
+              Suspense (10850) to reclassify later.
+            </p>
+            {extractingCashbook ? (
+              <div className="flex items-center gap-2 rounded-xl border border-dashed border-line-2 bg-card-tint/40 px-6 py-8 text-sm text-ink-3">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Extracting the cashbook from the PDF with AI…
+              </div>
+            ) : cashbookParsed ? (
+              <div className="space-y-3 rounded-xl border border-line bg-card p-4">
+                <div className="eyebrow">Map columns</div>
+                <div className="flex flex-wrap gap-3">
+                  <ColumnSelect
+                    label="Date"
+                    headers={cashbookParsed.headers}
+                    value={cashbookColumnMap?.date ?? ""}
+                    onChange={(v) => setCashbookColumnMap((m) => ({ ...(m as ColumnMap), date: v }))}
+                  />
+                  <ColumnSelect
+                    label="Description"
+                    headers={cashbookParsed.headers}
+                    value={cashbookColumnMap?.description ?? ""}
+                    onChange={(v) =>
+                      setCashbookColumnMap((m) => ({ ...(m as ColumnMap), description: v }))
+                    }
+                  />
+                  <ColumnSelect
+                    label="Amount (signed)"
+                    headers={cashbookParsed.headers}
+                    value={cashbookColumnMap?.amount ?? ""}
+                    optional
+                    onChange={(v) =>
+                      setCashbookColumnMap((m) => ({ ...(m as ColumnMap), amount: v || undefined }))
+                    }
+                  />
+                  <ColumnSelect
+                    label="Debit (out)"
+                    headers={cashbookParsed.headers}
+                    value={cashbookColumnMap?.debit ?? ""}
+                    optional
+                    onChange={(v) =>
+                      setCashbookColumnMap((m) => ({ ...(m as ColumnMap), debit: v || undefined }))
+                    }
+                  />
+                  <ColumnSelect
+                    label="Credit (in)"
+                    headers={cashbookParsed.headers}
+                    value={cashbookColumnMap?.credit ?? ""}
+                    optional
+                    onChange={(v) =>
+                      setCashbookColumnMap((m) => ({ ...(m as ColumnMap), credit: v || undefined }))
+                    }
+                  />
+                </div>
+                <p className="text-[11px] text-ink-4">{cashbookParsed.rows.length} rows found.</p>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={importCashbookParsed}>
+                    Import cashbook
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setCashbookParsed(null);
+                      setCashbookColumnMap(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-line-2 bg-card-tint/40 px-6 py-8 text-sm text-ink-3 hover:bg-card-tint focus-within:border-fmu-navy focus-within:ring-2 focus-within:ring-fmu-navy/30">
+                <Upload className="h-4 w-4" />
+                {ledgerTxns.length > 0
+                  ? "Replace the cashbook — upload a CSV or PDF"
+                  : "Upload your cashbook — CSV or PDF"}
+                <input
+                  type="file"
+                  accept=".csv,.pdf,text/csv,application/pdf"
+                  className="sr-only"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void onCashbookFile(f);
+                  }}
+                />
+              </label>
+            )}
+          </div>
+
+          {ledgerTxns.length > 0 && (
+            <>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-xl border border-line bg-card-tint/40 p-4">
+                <BalanceField
+                  label="Cashbook opening"
+                  editable
+                  strValue={cashbookOpeningStr}
+                  numValue={cashbookMeta.opening}
+                  onChange={(v) => editCashbookBalance("opening", v, false)}
+                  onCommit={(v) => editCashbookBalance("opening", v, true)}
+                />
+                <BalanceField
+                  label="Cashbook closing"
+                  editable
+                  strValue={cashbookClosingStr}
+                  numValue={cashbookMeta.closing}
+                  onChange={(v) => editCashbookBalance("closing", v, false)}
+                  onCommit={(v) => editCashbookBalance("closing", v, true)}
+                />
+              </div>
+              <div className="space-y-2">
+                <div className="eyebrow">
+                  {ledgerTxns.length} cashbook line{ledgerTxns.length === 1 ? "" : "s"}
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-line bg-card">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-line bg-card-tint/40 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                        <th className="w-28 px-3 py-2.5">Date</th>
+                        <th className="px-3 py-2.5">Description</th>
+                        <th className="w-28 px-3 py-2.5 text-right">Amount</th>
+                        <th className="w-56 px-3 py-2.5">Category (optional)</th>
+                        <th className="w-10 px-3 py-2.5" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {ledgerTxns.map((t) => (
+                        <tr key={t.id} className="border-b border-line last:border-0">
+                          <td className="num px-3 py-1.5 text-ink-3">{formatDate(t.date)}</td>
+                          <td className="px-3 py-1.5 text-ink">{t.description}</td>
+                          <td
+                            className={cn(
+                              "num px-3 py-1.5 text-right",
+                              t.signedAmount < 0 ? "text-fmu-red" : "text-fmu-green",
+                            )}
+                          >
+                            {fmtSigned(t.signedAmount)}
+                          </td>
+                          <td className="px-3 py-1.5">
+                            <select
+                              aria-label={`Category for ${t.description}`}
+                              value={t.accountCode ? `cat:${t.accountCode}` : ""}
+                              onChange={(e) =>
+                                categorizeCashbook(
+                                  t.id,
+                                  e.target.value.startsWith("cat:")
+                                    ? e.target.value.slice(4)
+                                    : "",
+                                )
+                              }
+                              className="w-full rounded border border-line bg-card px-1 py-0.5 text-[11px] outline-none focus:border-fmu-navy"
+                            >
+                              <option value="">Suspense (10850)</option>
+                              {(accounts ?? []).map((a) => (
+                                <option key={a._id} value={`cat:${a.code}`}>
+                                  {a.code} — {a.name}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="px-3 py-1.5 text-right">
+                            <button
+                              type="button"
+                              onClick={() => removeCashbookLine(t.id)}
+                              aria-label="Remove cashbook line"
+                              className="text-ink-4 hover:text-fmu-red"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
           )}
         </section>
       )}
@@ -1024,16 +1481,16 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
             {/* Ledger column */}
             <div className="space-y-2">
               <div className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
-                Ledger (unreconciled)
+                {modeA ? "Cashbook" : "Ledger (unreconciled)"}
               </div>
               <div className="divide-y divide-line rounded-xl border border-line bg-card">
-                {candidatesQ === undefined ? (
+                {!modeA && candidatesQ === undefined ? (
                   <div className="px-3 py-6 text-center text-[12px] text-ink-4">
                     Loading ledger entries…
                   </div>
                 ) : candidates.length === 0 ? (
                   <div className="px-3 py-6 text-center text-[12px] text-ink-4">
-                    No unreconciled ledger entries.
+                    {modeA ? "No cashbook lines." : "No unreconciled ledger entries."}
                   </div>
                 ) : (
                   candidates.map((c) => {
@@ -1118,6 +1575,14 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
             closingStr={closingStr}
             onEditBalance={editBalance}
           />
+          {modeA && (
+            <TwoSidedStatement
+              bankClosing={meta.closingBalance}
+              cashbookClosing={cashbookMeta.closing}
+              result={twoSided}
+              itemCount={reconcileItems.length}
+            />
+          )}
           <div className="flex flex-wrap gap-4 rounded-xl border border-line bg-card p-4 text-[12px] text-ink-2">
             <Stat label="Matched groups" value={matchGroups.length} />
             <Stat
@@ -1129,6 +1594,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
               value={lines.filter((l) => !isResolved(l)).length}
             />
             <Stat label="Statement lines" value={lines.length} />
+            {modeA && <Stat label="Cashbook lines" value={ledgerTxns.length} />}
           </div>
         </section>
       )}
@@ -1205,7 +1671,13 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
             {step !== "report" ? (
               <Button
                 size="sm"
-                disabled={!canLeaveBank}
+                disabled={
+                  step === "bank"
+                    ? !canLeaveBank
+                    : step === "ledger"
+                      ? !canLeaveLedger
+                      : false
+                }
                 onClick={() => goStep(nextStep(step))}
               >
                 Next
@@ -1213,28 +1685,27 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
               </Button>
             ) : (
               <>
-                {editable &&
-                  variance.variance !== null &&
-                  !variance.tied && (
-                    <label className="flex w-full items-start gap-2 rounded-lg border border-fmu-yellow/40 bg-fmu-yellow/5 p-3 text-[12px] text-ink-2">
-                      <input
-                        type="checkbox"
-                        aria-label="Acknowledge the reconciliation variance and post anyway"
-                        checked={ackVariance}
-                        onChange={(e) => setAckVariance(e.target.checked)}
-                        className="mt-0.5"
-                      />
-                      <span>
-                        This statement is off by{" "}
-                        <span className="num">{fmtSigned(variance.variance)}</span>{" "}
-                        (expected closing{" "}
-                        <span className="num">{formatAmount(variance.expectedClosing!)}</span>
-                        , stated{" "}
-                        <span className="num">{formatAmount(variance.closing!)}</span>). I've
-                        reviewed it and want to post anyway.
-                      </span>
-                    </label>
-                  )}
+                {editable && gateVariance !== null && !gateTied && (
+                  <label className="flex w-full items-start gap-2 rounded-lg border border-fmu-yellow/40 bg-fmu-yellow/5 p-3 text-[12px] text-ink-2">
+                    <input
+                      type="checkbox"
+                      aria-label="Acknowledge the reconciliation variance and post anyway"
+                      checked={ackVariance}
+                      onChange={(e) => setAckVariance(e.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      {modeA
+                        ? "The bank and cashbook are off by "
+                        : "This statement is off by "}
+                      <span className="num">{fmtSigned(gateVariance)}</span>
+                      {modeA
+                        ? " after the unmatched items"
+                        : ` (expected closing ${formatAmount(variance.expectedClosing!)}, stated ${formatAmount(variance.closing!)})`}
+                      . I've reviewed it and want to post anyway.
+                    </span>
+                  </label>
+                )}
                 {task.status === "draft" && (
                   <Button
                     size="lg"
@@ -1319,6 +1790,63 @@ function MatchGroupRow({
         <X className="h-3.5 w-3.5" />
       </button>
     </div>
+  );
+}
+
+function TwoSidedStatement({
+  bankClosing,
+  cashbookClosing,
+  result,
+  itemCount,
+}: {
+  bankClosing: number | undefined;
+  cashbookClosing: number | undefined;
+  result: ReturnType<typeof reconcileToZero> | null;
+  itemCount: number;
+}) {
+  const known = bankClosing != null && cashbookClosing != null;
+  const tied = result ? Math.abs(result.residual) <= 0.02 : false;
+  const cell = (label: string, content: string) => (
+    <div className="flex flex-col gap-1">
+      <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink-3">
+        {label}
+      </span>
+      <span className="num text-[13px] text-ink">{content}</span>
+    </div>
+  );
+  return (
+    <section className="space-y-3 rounded-xl border border-line bg-card-tint/40 p-4">
+      <div className="eyebrow">Bank vs cashbook</div>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
+        {cell("Bank closing", bankClosing != null ? formatAmount(bankClosing) : "—")}
+        {cell(
+          "Cashbook closing",
+          cashbookClosing != null ? formatAmount(cashbookClosing) : "—",
+        )}
+        {cell("Reconciling items", String(itemCount))}
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
+        <span className="text-[12px] text-ink-3">
+          {!known
+            ? "Enter both closing balances to tie out the two sides."
+            : tied
+              ? "The bank and cashbook reconcile after the unmatched items."
+              : "The two sides don't tie out — review the unmatched items."}
+        </span>
+        <span
+          className={cn(
+            "pill",
+            !known ? "pill--neutral" : tied ? "pill--balanced" : "pill--blocked",
+          )}
+        >
+          {!known
+            ? "No balances"
+            : tied
+              ? "Reconciled"
+              : `Off by ${fmtSigned(result!.residual)}`}
+        </span>
+      </div>
+    </section>
   );
 }
 
@@ -1522,6 +2050,41 @@ function CandidatesTable({
   );
 }
 
+function SourceOption({
+  active,
+  title,
+  desc,
+  onClick,
+}: {
+  active: boolean;
+  title: string;
+  desc: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "rounded-xl border p-3 text-left transition-colors",
+        active ? "border-fmu-navy bg-fmu-navy/5" : "border-line bg-card hover:bg-card-tint",
+      )}
+    >
+      <div className="flex items-center gap-2 text-[13px] font-medium text-ink">
+        <span
+          className={cn(
+            "h-3.5 w-3.5 rounded-full border",
+            active ? "border-fmu-navy bg-fmu-navy" : "border-line-2",
+          )}
+        />
+        {title}
+      </div>
+      <p className="mt-1 text-[11px] text-ink-3">{desc}</p>
+    </button>
+  );
+}
+
 function Stat({ label, value }: { label: string; value: number }) {
   return (
     <div className="flex flex-col gap-0.5">
@@ -1619,6 +2182,16 @@ function ColumnSelect({
 
 function fmtSigned(n: number): string {
   return `${n < 0 ? "−" : "+"}${formatAmount(Math.abs(n))}`;
+}
+
+/** Map a parsed/extracted statement line to a cashbook LedgerTxn (Mode A). */
+function toLedgerTxn(l: StatementLine): LedgerTxn {
+  return {
+    id: l.rowHash,
+    date: l.date,
+    description: l.description,
+    signedAmount: l.signedAmount,
+  };
 }
 
 function prevStep(s: WizardStep): WizardStep {
