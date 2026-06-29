@@ -1,22 +1,33 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useAction, useMutation, useQuery } from "convex/react";
-import { Loader2, RotateCcw, Sparkles, Upload } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Link2,
+  Loader2,
+  RotateCcw,
+  Sparkles,
+  Upload,
+  X,
+} from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { TaskRendererProps } from "@/modules/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatAmount, formatDate } from "@/lib/formatters";
+import { round2 } from "@/modules/accounting/lib/journal-entry";
 import {
   type BankRecPayload,
   type ColumnMap,
-  type LineMatch,
+  type MatchGroup,
   type StatementLine,
-  bankRecCoverage,
   bankRecVariance,
+  effectiveMatchGroups,
   guessColumnMap,
   hashText,
   mapRowsToLines,
@@ -26,6 +37,21 @@ import {
 } from "@/modules/accounting/lib/bank-statement";
 
 type Parsed = { headers: string[]; rows: Record<string, string>[] };
+type WizardStep = "bank" | "ledger" | "reconcile" | "report";
+type Candidate = {
+  _id: string;
+  date: number;
+  description: string;
+  accountName?: string;
+  signedAmount: number;
+};
+
+const STEPS: { key: WizardStep; label: string }[] = [
+  { key: "bank", label: "Bank statement" },
+  { key: "ledger", label: "Ledger" },
+  { key: "reconcile", label: "Reconcile" },
+  { key: "report", label: "Report" },
+];
 
 export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
   const updateTask = useMutation(api.tasks.update);
@@ -44,6 +70,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
   const extractStatement = useAction(
     api.modules.accounting.extract.extractStatement,
   );
+  const aiMatch = useAction(api.modules.accounting.match.aiMatch);
 
   const server = (task.payload ?? {}) as BankRecPayload;
   const posted = task.status === "firm_approved";
@@ -51,20 +78,27 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
 
   const [bankAccountId, setBankAccountId] = useState(server.bankAccountId ?? "");
   const [lines, setLines] = useState<StatementLine[]>(server.lines ?? []);
-  const [matches, setMatches] = useState<LineMatch[]>(server.matches ?? []);
+  const [matchGroups, setMatchGroups] = useState<MatchGroup[]>(() =>
+    effectiveMatchGroups(server),
+  );
   const [hash, setHash] = useState(server.statementFileHash ?? "");
   const [parsed, setParsed] = useState<Parsed | null>(null);
   const [columnMap, setColumnMap] = useState<ColumnMap | null>(null);
+  const [step, setStep] = useState<WizardStep>(
+    server.step ?? ((server.lines?.length ?? 0) > 0 ? "reconcile" : "bank"),
+  );
+  const [selBank, setSelBank] = useState<Set<string>>(new Set());
+  const [selLedger, setSelLedger] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
   const [reopening, setReopening] = useState(false);
   const [reopenReason, setReopenReason] = useState("");
   const [newBank, setNewBank] = useState<{ name: string; code: string } | null>(
     null,
   );
   const [extracting, setExtracting] = useState(false);
-  // Statement metadata (set by AI PDF extraction; persisted with the payload).
   const [meta, setMeta] = useState<{
     sourceFormat?: "csv" | "pdf";
     bankName?: string;
@@ -80,8 +114,6 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     openingBalance: server.openingBalance,
     closingBalance: server.closingBalance,
   });
-  // Input buffers for the balance fields (controlled, so the variance/gate track
-  // what's typed within the same render; meta holds the parsed numbers).
   const [openingStr, setOpeningStr] = useState(
     server.openingBalance != null ? String(server.openingBalance) : "",
   );
@@ -89,69 +121,93 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     server.closingBalance != null ? String(server.closingBalance) : "",
   );
   const [ackVariance, setAckVariance] = useState(false);
-  // A line / match / balance edit invalidates a prior variance acknowledgement,
-  // so the soft gate re-arms (the checkbox must be re-ticked).
+
+  // A line / match / balance edit invalidates a prior variance acknowledgement.
   useEffect(() => {
     setAckVariance(false);
-  }, [lines, matches, meta.openingBalance, meta.closingBalance]);
+  }, [lines, matchGroups, meta.openingBalance, meta.closingBalance]);
+
+  // When an AI auto-match run lands server-side, adopt the server's merged
+  // groups (manual groups preserved + AI groups added). Keyed on the run
+  // timestamp so manual edits between runs are never clobbered.
+  const aiRanAt = server.aiMatch?.ranAt;
+  useEffect(() => {
+    if (aiRanAt !== undefined) {
+      setMatchGroups(effectiveMatchGroups(server));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiRanAt]);
 
   const contraCode = (bankAccounts ?? []).find(
     (b) => b._id === bankAccountId,
   )?.ledgerAccountCode;
   // Unreconciled entries on this bank's ledger account — the only valid match
-  // targets. Loads once a bank account is chosen.
+  // targets. Still-unmatched-in-the-DB during the wizard, so matched-but-not-
+  // posted entries remain here and resolve group ledger details.
   const candidatesQ = useQuery(
     api.modules.accounting.ledger.getUnreconciledEntries,
     contraCode && editable
       ? { customerId: task.customerId, accountCode: contraCode }
       : "skip",
   );
-
-  const candidates = candidatesQ ?? [];
-  const matchedHashes = new Set(matches.map((m) => m.rowHash));
-  const matchedLedgerIds = new Set(matches.map((m) => m.ledgerEntryId));
-  // Candidates not already claimed by another matched line.
-  const availableCandidates = candidates.filter(
-    (c) => !matchedLedgerIds.has(c._id),
+  const candidates: Candidate[] = candidatesQ ?? [];
+  const candById = useMemo(
+    () => new Map(candidates.map((c) => [c._id, c])),
+    [candidates],
   );
-  const isResolved = (l: StatementLine) =>
-    !!l.accountCode || matchedHashes.has(l.rowHash);
-  // Deterministic exact-match suggestions over still-unresolved lines —
-  // surfaced for the user to accept, never silently applied.
+  const lineByHash = useMemo(
+    () => new Map(lines.map((l) => [l.rowHash, l])),
+    [lines],
+  );
+
+  const matchedBankHashes = useMemo(
+    () => new Set(matchGroups.flatMap((g) => g.bankRowHashes)),
+    [matchGroups],
+  );
+  const claimedLedger = useMemo(
+    () => new Set(matchGroups.flatMap((g) => g.ledgerRefs)),
+    [matchGroups],
+  );
+  const availableCandidates = candidates.filter((c) => !claimedLedger.has(c._id));
+
+  const isMatched = (l: StatementLine) => matchedBankHashes.has(l.rowHash);
+  const isResolved = (l: StatementLine) => isMatched(l) || !!l.accountCode;
+  const resolvedCount = lines.filter(isResolved).length;
+  const coverageReady = lines.length > 0 && resolvedCount === lines.length;
+
+  // Deterministic exact-match suggestions over still-unresolved lines.
   const suggestions = suggestExactMatches(
     lines.filter((l) => !isResolved(l)),
     availableCandidates,
   );
-  const suggestionByHash = new Map(suggestions.map((s) => [s.rowHash, s]));
 
-  const coverage = bankRecCoverage(lines, matches);
   const variance = bankRecVariance(
     lines,
     meta.openingBalance,
     meta.closingBalance,
   );
-  // Soft variance gate: block posting only when balances are known AND don't
-  // tie out AND the user hasn't acknowledged the discrepancy. Unknown balances
-  // (common for CSV) never block.
-  const varianceOk =
-    variance.variance === null || variance.tied || ackVariance;
+  const varianceOk = variance.variance === null || variance.tied || ackVariance;
   const ready =
-    coverage.ready &&
+    coverageReady &&
     !!bankAccountId &&
     (accounts?.length ?? 0) > 0 &&
     varianceOk;
+
+  const canLeaveBank = lines.length > 0 && !!bankAccountId;
   const postedBankName = (bankAccounts ?? []).find(
     (b) => b._id === (server.bankAccountId ?? bankAccountId),
   )?.name;
 
   async function persist(next?: Partial<BankRecPayload>) {
-    // Merge overrides first, then derive the period from the *merged* lines —
-    // so a passed-in `lines` always wins over the render-scope closure.
     const merged: BankRecPayload = {
       bankAccountId,
       statementFileHash: hash,
       lines,
-      matches,
+      // The wizard authors matchGroups; neutralise the legacy 1:1 field so
+      // finalize's effectiveMatchGroups never double-counts.
+      matches: [],
+      matchGroups,
+      step,
       ...meta,
       ...next,
     };
@@ -161,11 +217,19 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     await updateTask({ taskId, payload: merged });
   }
 
+  function goStep(s: WizardStep) {
+    if (s !== "bank" && !canLeaveBank) return;
+    setStep(s);
+    setSelBank(new Set());
+    setSelLedger(new Set());
+    void persist({ step: s });
+  }
+
+  // ── Upload / ingest ────────────────────────────────────────────────
   async function onFile(file: File) {
     setError(null);
     setNotice(null);
-    const isPdf =
-      file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+    const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
     if (isPdf) {
       await extractPdf(file);
       return;
@@ -181,7 +245,6 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     }
   }
 
-  /** Upload a PDF to storage, then have Claude extract it (Phase 3c). */
   async function extractPdf(file: File) {
     setExtracting(true);
     setError(null);
@@ -208,7 +271,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
         closingBalance: out.meta.closingBalance,
       };
       setLines(out.lines);
-      setMatches([]);
+      setMatchGroups([]);
       setMeta(nextMeta);
       setOpeningStr(
         nextMeta.openingBalance != null ? String(nextMeta.openingBalance) : "",
@@ -219,7 +282,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
       setHash(out.fileHash);
       await persist({
         lines: out.lines,
-        matches: [],
+        matchGroups: [],
         statementFileHash: out.fileHash,
         ...nextMeta,
       });
@@ -229,7 +292,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
         ? " Output was truncated — double-check the last rows."
         : "";
       setNotice(
-        `AI extracted ${out.lines.length} transactions from the PDF — review each line before posting.${skip}${trunc}`,
+        `AI extracted ${out.lines.length} transactions — review each line, then reconcile.${skip}${trunc}`,
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -247,8 +310,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     }
     setError(null);
     setLines(mapped);
-    setMatches([]);
-    // Clear any prior PDF-extraction metadata — this is a CSV import now.
+    setMatchGroups([]);
     const csvMeta = {
       sourceFormat: "csv" as const,
       bankName: undefined,
@@ -276,60 +338,140 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     } else {
       setNotice(null);
     }
-    void persist({ lines: mapped, matches: [], ...csvMeta });
+    void persist({ lines: mapped, matchGroups: [], ...csvMeta });
   }
 
-  /** Set a line's treatment from the unified dropdown: "match:<ledgerId>",
-   *  "cat:<accountCode>", or "" (clear). Match and category are mutually
-   *  exclusive per line. */
-  function setTreatment(line: StatementLine, value: string) {
-    let nextMatches = matches.filter((m) => m.rowHash !== line.rowHash);
-    let nextLines = lines;
-    if (value.startsWith("match:")) {
-      const ledgerEntryId = value.slice(6);
-      const cand = candidates.find((c) => c._id === ledgerEntryId);
-      if (!cand) return;
-      nextMatches = [
-        ...nextMatches,
-        {
-          rowHash: line.rowHash,
-          ledgerEntryId,
-          matchType: "manual",
-          ledgerDate: cand.date,
-          ledgerDescription: cand.description,
-          ledgerAmount: cand.signedAmount,
-        },
-      ];
-      nextLines = lines.map((l) =>
-        l.rowHash === line.rowHash ? { ...l, accountCode: undefined } : l,
-      );
-    } else if (value.startsWith("cat:")) {
-      nextLines = lines.map((l) =>
-        l.rowHash === line.rowHash ? { ...l, accountCode: value.slice(4) } : l,
-      );
-    } else {
-      nextLines = lines.map((l) =>
-        l.rowHash === line.rowHash ? { ...l, accountCode: undefined } : l,
-      );
-    }
-    setMatches(nextMatches);
+  function removeLine(rowHash: string) {
+    const nextLines = lines.filter((l) => l.rowHash !== rowHash);
+    const nextGroups = matchGroups
+      .map((g) => ({
+        ...g,
+        bankRowHashes: g.bankRowHashes.filter((h) => h !== rowHash),
+      }))
+      .filter((g) => g.bankRowHashes.length > 0);
     setLines(nextLines);
-    void persist({ lines: nextLines, matches: nextMatches });
+    setMatchGroups(nextGroups);
+    void persist({ lines: nextLines, matchGroups: nextGroups });
   }
 
-  function acceptSuggestion(line: StatementLine, s: LineMatch) {
-    const nextMatches = [
-      ...matches.filter((m) => m.rowHash !== line.rowHash),
-      s,
-    ];
+  // ── Matching ───────────────────────────────────────────────────────
+  function toggleSel(set: Set<string>, setFn: (s: Set<string>) => void, id: string) {
+    const next = new Set(set);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setFn(next);
+  }
+
+  const selBankSigned = round2(
+    [...selBank].reduce((s, h) => round2(s + (lineByHash.get(h)?.signedAmount ?? 0)), 0),
+  );
+  const selLedgerSigned = round2(
+    [...selLedger].reduce((s, id) => round2(s + (candById.get(id)?.signedAmount ?? 0)), 0),
+  );
+  const selBalances =
+    selBank.size > 0 &&
+    selLedger.size > 0 &&
+    Math.abs(selBankSigned - selLedgerSigned) <= 0.02;
+
+  function createMatch() {
+    if (!selBalances) return;
+    const bankRowHashes = [...selBank];
+    const ledgerRefs = [...selLedger];
+    const group: MatchGroup = {
+      groupId:
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `m_${hashText(bankRowHashes.join("|") + ledgerRefs.join("|"))}`,
+      bankRowHashes,
+      ledgerRefs,
+      source: "manual",
+    };
     const nextLines = lines.map((l) =>
-      l.rowHash === line.rowHash ? { ...l, accountCode: undefined } : l,
+      bankRowHashes.includes(l.rowHash) ? { ...l, accountCode: undefined } : l,
     );
-    setMatches(nextMatches);
+    const nextGroups = [...matchGroups, group];
     setLines(nextLines);
-    void persist({ lines: nextLines, matches: nextMatches });
+    setMatchGroups(nextGroups);
+    setSelBank(new Set());
+    setSelLedger(new Set());
+    setError(null);
+    void persist({ lines: nextLines, matchGroups: nextGroups });
   }
 
+  function unmatch(groupId: string) {
+    const nextGroups = matchGroups.filter((g) => g.groupId !== groupId);
+    setMatchGroups(nextGroups);
+    void persist({ matchGroups: nextGroups });
+  }
+
+  function acceptSuggestions() {
+    if (suggestions.length === 0) return;
+    const used = new Set<string>();
+    const newGroups: MatchGroup[] = [];
+    for (const s of suggestions) {
+      if (used.has(s.ledgerEntryId)) continue;
+      used.add(s.ledgerEntryId);
+      newGroups.push({
+        groupId:
+          typeof crypto !== "undefined" && "randomUUID" in crypto
+            ? crypto.randomUUID()
+            : `s_${hashText(s.rowHash + s.ledgerEntryId)}`,
+        bankRowHashes: [s.rowHash],
+        ledgerRefs: [s.ledgerEntryId],
+        source: "exact",
+      });
+    }
+    const hashes = new Set(newGroups.flatMap((g) => g.bankRowHashes));
+    const nextLines = lines.map((l) =>
+      hashes.has(l.rowHash) ? { ...l, accountCode: undefined } : l,
+    );
+    const nextGroups = [...matchGroups, ...newGroups];
+    setLines(nextLines);
+    setMatchGroups(nextGroups);
+    void persist({ lines: nextLines, matchGroups: nextGroups });
+  }
+
+  function categorize(rowHash: string, accountCode: string) {
+    const nextGroups = matchGroups
+      .map((g) => ({
+        ...g,
+        bankRowHashes: g.bankRowHashes.filter((h) => h !== rowHash),
+      }))
+      .filter((g) => g.bankRowHashes.length > 0);
+    const nextLines = lines.map((l) =>
+      l.rowHash === rowHash ? { ...l, accountCode: accountCode || undefined } : l,
+    );
+    setMatchGroups(nextGroups);
+    setLines(nextLines);
+    void persist({ lines: nextLines, matchGroups: nextGroups });
+  }
+
+  async function autoMatch() {
+    setAiBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      // Persist current manual matches so the action's gate reads the latest.
+      await persist();
+      const out = await aiMatch({ taskId });
+      // The aiRanAt effect adopts the server's merged groups on next render.
+      if (out.matched > 0) {
+        setNotice(
+          `AI matched ${out.matched} group(s). ${out.unmatchedBank} bank + ${out.unmatchedLedger} ledger still unmatched.` +
+            (out.truncated ? " Output was truncated — run again to continue." : "") +
+            (out.candidateCapped ? " (ledger candidate list was capped)" : ""),
+        );
+      } else {
+        setNotice(out.note ?? "No further matches found — resolve the rest manually.");
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  // ── Bank account ───────────────────────────────────────────────────
   async function chooseBank(id: string) {
     setBankAccountId(id);
     await persist({ bankAccountId: id });
@@ -354,10 +496,6 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     }
   }
 
-  /** Edit an opening/closing balance. Updates the input buffer + the live meta
-   *  value on every keystroke (so the variance/gate reflect what's on screen),
-   *  and persists only on commit (blur). Empty or non-numeric = unknown, never
-   *  a spurious 0 — the whole tie-out hinges on null (unknown) vs 0 (known). */
   function editBalance(
     field: "openingBalance" | "closingBalance",
     raw: string,
@@ -379,15 +517,12 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     setBusy(true);
     try {
       if (editable) {
-        // Record the variance + acknowledgement at the moment of posting.
         await persist(
           status === "firm_approved"
             ? {
                 varianceAtPost: variance.variance ?? undefined,
                 varianceAcknowledged:
-                  variance.variance !== null && !variance.tied
-                    ? true
-                    : undefined,
+                  variance.variance !== null && !variance.tied ? true : undefined,
               }
             : undefined,
         );
@@ -400,18 +535,15 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     }
   }
 
+  // ── Render ─────────────────────────────────────────────────────────
   return (
-    <div className="mx-auto w-full max-w-4xl px-8 py-10">
+    <div className="mx-auto w-full max-w-5xl px-8 py-10">
       <header className="space-y-1">
         <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink-3">
           Bank reconciliation
           <span className="mx-2 text-ink-4">·</span>
           <span className={posted ? "text-fmu-green" : "text-ink-2"}>
-            {posted
-              ? "Posted"
-              : task.status === "review"
-                ? "In review"
-                : "Draft"}
+            {posted ? "Posted" : task.status === "review" ? "In review" : "Draft"}
           </span>
         </div>
         <h1 className="text-3xl font-semibold tracking-tight text-ink">
@@ -443,66 +575,97 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
         </div>
       )}
 
-      {/* Bank account picker */}
-      {!posted && accounts !== undefined && accounts.length > 0 && (
-        <section className="mt-6 space-y-2">
-          <div className="eyebrow">Bank account</div>
-          {newBank ? (
-            <div className="flex flex-wrap items-end gap-2 rounded-lg border border-line bg-card p-3">
-              <Labeled label="Name">
-                <input
-                  value={newBank.name}
-                  onChange={(e) =>
-                    setNewBank({ ...newBank, name: e.target.value })
-                  }
-                  placeholder="MCB current"
-                  className="rounded border border-line bg-card px-2 py-1 text-sm outline-none focus:border-fmu-navy"
-                />
-              </Labeled>
-              <Labeled label="Ledger (bank) account">
-                <select
-                  value={newBank.code}
-                  onChange={(e) =>
-                    setNewBank({ ...newBank, code: e.target.value })
-                  }
-                  className="rounded border border-line bg-card px-2 py-1 text-sm outline-none focus:border-fmu-navy"
+      {/* Stepper (hidden once posted — shows the read-only report) */}
+      {!posted && (
+        <nav className="mt-6 flex items-center gap-1">
+          {STEPS.map((s, i) => {
+            const active = s.key === step;
+            const reachable = s.key === "bank" || canLeaveBank;
+            return (
+              <button
+                key={s.key}
+                type="button"
+                disabled={!reachable}
+                onClick={() => goStep(s.key)}
+                className={cn(
+                  "flex items-center gap-2 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
+                  active
+                    ? "bg-fmu-navy text-white"
+                    : reachable
+                      ? "text-ink-2 hover:bg-card-tint"
+                      : "text-ink-4",
+                )}
+              >
+                <span
+                  className={cn(
+                    "num flex h-4 w-4 items-center justify-center rounded-full text-[9px]",
+                    active ? "bg-white/20" : "bg-line-2/60 text-ink-3",
+                  )}
                 >
-                  <option value="">Select…</option>
-                  {accounts.map((a) => (
-                    <option key={a._id} value={a.code}>
-                      {a.code} — {a.name}
+                  {i + 1}
+                </span>
+                {s.label}
+              </button>
+            );
+          })}
+        </nav>
+      )}
+
+      {/* ── Step 1: Bank statement ── */}
+      {!posted && step === "bank" && accounts !== undefined && accounts.length > 0 && (
+        <section className="mt-6 space-y-5">
+          <div className="space-y-2">
+            <div className="eyebrow">Bank account</div>
+            {newBank ? (
+              <div className="flex flex-wrap items-end gap-2 rounded-lg border border-line bg-card p-3">
+                <Labeled label="Name">
+                  <input
+                    value={newBank.name}
+                    onChange={(e) => setNewBank({ ...newBank, name: e.target.value })}
+                    placeholder="MCB current"
+                    className="rounded border border-line bg-card px-2 py-1 text-sm outline-none focus:border-fmu-navy"
+                  />
+                </Labeled>
+                <Labeled label="Ledger (bank) account">
+                  <select
+                    value={newBank.code}
+                    onChange={(e) => setNewBank({ ...newBank, code: e.target.value })}
+                    className="rounded border border-line bg-card px-2 py-1 text-sm outline-none focus:border-fmu-navy"
+                  >
+                    <option value="">Select…</option>
+                    {accounts.map((a) => (
+                      <option key={a._id} value={a.code}>
+                        {a.code} — {a.name}
+                      </option>
+                    ))}
+                  </select>
+                </Labeled>
+                <Button
+                  size="sm"
+                  disabled={busy || !newBank.name.trim() || !newBank.code}
+                  onClick={() => void addBankAccount()}
+                >
+                  Add
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => setNewBank(null)}>
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <select
+                  value={bankAccountId}
+                  onChange={(e) => void chooseBank(e.target.value)}
+                  className="rounded border border-line bg-card px-2 py-1.5 text-sm outline-none focus:border-fmu-navy"
+                >
+                  <option value="">Select bank account…</option>
+                  {(bankAccounts ?? []).map((b) => (
+                    <option key={b._id} value={b._id}>
+                      {b.name}
+                      {b.bankName ? ` (${b.bankName})` : ""}
                     </option>
                   ))}
                 </select>
-              </Labeled>
-              <Button
-                size="sm"
-                disabled={busy || !newBank.name.trim() || !newBank.code}
-                onClick={() => void addBankAccount()}
-              >
-                Add
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => setNewBank(null)}>
-                Cancel
-              </Button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
-              <select
-                value={bankAccountId}
-                onChange={(e) => void chooseBank(e.target.value)}
-                disabled={!editable}
-                className="rounded border border-line bg-card px-2 py-1.5 text-sm outline-none focus:border-fmu-navy"
-              >
-                <option value="">Select bank account…</option>
-                {(bankAccounts ?? []).map((b) => (
-                  <option key={b._id} value={b._id}>
-                    {b.name}
-                    {b.bankName ? ` (${b.bankName})` : ""}
-                  </option>
-                ))}
-              </select>
-              {editable && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -510,360 +673,403 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
                 >
                   Add bank account
                 </Button>
-              )}
-            </div>
+              </div>
+            )}
+          </div>
+
+          {/* Upload / column map */}
+          <div className="space-y-2">
+            <div className="eyebrow">Statement</div>
+            {extracting ? (
+              <div className="flex items-center gap-2 rounded-xl border border-dashed border-line-2 bg-card-tint/40 px-6 py-8 text-sm text-ink-3">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Extracting transactions from the PDF with AI…
+              </div>
+            ) : parsed ? (
+              <div className="space-y-3 rounded-xl border border-line bg-card p-4">
+                <div className="eyebrow">Map columns</div>
+                <div className="flex flex-wrap gap-3">
+                  <ColumnSelect
+                    label="Date"
+                    headers={parsed.headers}
+                    value={columnMap?.date ?? ""}
+                    onChange={(v) => setColumnMap((m) => ({ ...(m as ColumnMap), date: v }))}
+                  />
+                  <ColumnSelect
+                    label="Description"
+                    headers={parsed.headers}
+                    value={columnMap?.description ?? ""}
+                    onChange={(v) =>
+                      setColumnMap((m) => ({ ...(m as ColumnMap), description: v }))
+                    }
+                  />
+                  <ColumnSelect
+                    label="Amount (signed)"
+                    headers={parsed.headers}
+                    value={columnMap?.amount ?? ""}
+                    optional
+                    onChange={(v) =>
+                      setColumnMap((m) => ({ ...(m as ColumnMap), amount: v || undefined }))
+                    }
+                  />
+                  <ColumnSelect
+                    label="Debit (out)"
+                    headers={parsed.headers}
+                    value={columnMap?.debit ?? ""}
+                    optional
+                    onChange={(v) =>
+                      setColumnMap((m) => ({ ...(m as ColumnMap), debit: v || undefined }))
+                    }
+                  />
+                  <ColumnSelect
+                    label="Credit (in)"
+                    headers={parsed.headers}
+                    value={columnMap?.credit ?? ""}
+                    optional
+                    onChange={(v) =>
+                      setColumnMap((m) => ({ ...(m as ColumnMap), credit: v || undefined }))
+                    }
+                  />
+                </div>
+                <p className="text-[11px] text-ink-4">
+                  Set a single signed <b>Amount</b> column, or separate <b>Debit</b> and{" "}
+                  <b>Credit</b> columns. {parsed.rows.length} rows found.
+                </p>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={importParsed}>
+                    Import transactions
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setParsed(null);
+                      setColumnMap(null);
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-line-2 bg-card-tint/40 px-6 py-8 text-sm text-ink-3 hover:bg-card-tint">
+                <Upload className="h-4 w-4" />
+                {lines.length > 0
+                  ? "Replace the statement — upload a CSV or PDF"
+                  : "Upload a bank statement — CSV or PDF"}
+                <input
+                  type="file"
+                  accept=".csv,.pdf,text/csv,application/pdf"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void onFile(f);
+                  }}
+                />
+              </label>
+            )}
+          </div>
+
+          {/* Extracted lines + balances */}
+          {lines.length > 0 && (
+            <>
+              <ReconStatement
+                meta={meta}
+                variance={variance}
+                editable
+                openingStr={openingStr}
+                closingStr={closingStr}
+                onEditBalance={editBalance}
+              />
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="eyebrow">
+                    {lines.length} statement line{lines.length === 1 ? "" : "s"}
+                  </div>
+                </div>
+                <LinesTable lines={lines} onRemove={removeLine} />
+              </div>
+            </>
           )}
         </section>
       )}
 
-      {/* Upload + column map (when no lines yet) */}
-      {editable && lines.length === 0 && !posted && (
+      {/* ── Step 2: Ledger (Mode B preview) ── */}
+      {!posted && step === "ledger" && (
         <section className="mt-6 space-y-3">
-          {extracting ? (
-            <div className="flex items-center gap-2 rounded-xl border border-dashed border-line-2 bg-card-tint/40 px-6 py-8 text-sm text-ink-3">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Extracting transactions from the PDF with AI…
+          <div className="eyebrow">Ledger — unreconciled entries</div>
+          <p className="text-[12px] text-ink-3">
+            These are the unposted-against entries on{" "}
+            <span className="font-medium text-ink-2">{contraName(bankAccounts, bankAccountId)}</span>
+            's ledger account — the candidates the statement reconciles against. Bank
+            lines you don't match here will post as new ledger entries.
+          </p>
+          {candidatesQ === undefined ? (
+            <div className="rounded-xl border border-line bg-card px-4 py-6 text-sm text-ink-3">
+              Loading ledger entries…
             </div>
-          ) : !parsed ? (
-            <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-line-2 bg-card-tint/40 px-6 py-8 text-sm text-ink-3 hover:bg-card-tint">
-              <Upload className="h-4 w-4" />
-              Upload a bank statement — CSV or PDF
-              <input
-                type="file"
-                accept=".csv,.pdf,text/csv,application/pdf"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void onFile(f);
-                }}
-              />
-            </label>
+          ) : candidates.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-line-2 bg-card-tint/40 px-4 py-6 text-sm text-ink-3">
+              No unreconciled ledger entries on this account — every statement line will
+              post as a new entry.
+            </div>
           ) : (
-            <div className="space-y-3 rounded-xl border border-line bg-card p-4">
-              <div className="eyebrow">Map columns</div>
-              <div className="flex flex-wrap gap-3">
-                <ColumnSelect
-                  label="Date"
-                  headers={parsed.headers}
-                  value={columnMap?.date ?? ""}
-                  onChange={(v) =>
-                    setColumnMap((m) => ({ ...(m as ColumnMap), date: v }))
-                  }
-                />
-                <ColumnSelect
-                  label="Description"
-                  headers={parsed.headers}
-                  value={columnMap?.description ?? ""}
-                  onChange={(v) =>
-                    setColumnMap((m) => ({
-                      ...(m as ColumnMap),
-                      description: v,
-                    }))
-                  }
-                />
-                <ColumnSelect
-                  label="Amount (signed)"
-                  headers={parsed.headers}
-                  value={columnMap?.amount ?? ""}
-                  optional
-                  onChange={(v) =>
-                    setColumnMap((m) => ({
-                      ...(m as ColumnMap),
-                      amount: v || undefined,
-                    }))
-                  }
-                />
-                <ColumnSelect
-                  label="Debit (out)"
-                  headers={parsed.headers}
-                  value={columnMap?.debit ?? ""}
-                  optional
-                  onChange={(v) =>
-                    setColumnMap((m) => ({
-                      ...(m as ColumnMap),
-                      debit: v || undefined,
-                    }))
-                  }
-                />
-                <ColumnSelect
-                  label="Credit (in)"
-                  headers={parsed.headers}
-                  value={columnMap?.credit ?? ""}
-                  optional
-                  onChange={(v) =>
-                    setColumnMap((m) => ({
-                      ...(m as ColumnMap),
-                      credit: v || undefined,
-                    }))
-                  }
-                />
-              </div>
-              <p className="text-[11px] text-ink-4">
-                Set a single signed <b>Amount</b> column, or separate{" "}
-                <b>Debit</b> and <b>Credit</b> columns. {parsed.rows.length}{" "}
-                rows found.
-              </p>
-              <div className="flex gap-2">
-                <Button size="sm" onClick={importParsed}>
-                  Import transactions
+            <CandidatesTable rows={candidates} claimed={claimedLedger} />
+          )}
+        </section>
+      )}
+
+      {/* ── Step 3: Reconcile ── */}
+      {!posted && step === "reconcile" && (
+        <section className="mt-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="eyebrow">Reconcile</div>
+            <div className="flex items-center gap-2">
+              <span
+                className={cn(
+                  "pill",
+                  coverageReady ? "pill--balanced" : "pill--blocked",
+                )}
+              >
+                <span className="num">{resolvedCount}</span>/
+                <span className="num">{lines.length}</span> resolved
+              </span>
+              {suggestions.length > 0 && (
+                <Button size="sm" variant="outline" onClick={acceptSuggestions}>
+                  <Check className="h-3.5 w-3.5" />
+                  Accept {suggestions.length} exact
+                </Button>
+              )}
+              <Button size="sm" disabled={aiBusy} onClick={() => void autoMatch()}>
+                {aiBusy ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5" />
+                )}
+                Auto-match remaining
+              </Button>
+            </div>
+          </div>
+
+          {/* Create-match bar */}
+          {(selBank.size > 0 || selLedger.size > 0) && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-fmu-navy/30 bg-fmu-navy/5 px-3 py-2 text-[12px]">
+              <span className="text-ink-2">
+                <span className="num">{selBank.size}</span> bank (
+                <span className="num">{fmtSigned(selBankSigned)}</span>) ·{" "}
+                <span className="num">{selLedger.size}</span> ledger (
+                <span className="num">{fmtSigned(selLedgerSigned)}</span>)
+                {selBank.size > 0 && selLedger.size > 0 && !selBalances && (
+                  <span className="ml-2 text-fmu-red">
+                    off by {fmtSigned(round2(selBankSigned - selLedgerSigned))}
+                  </span>
+                )}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button size="sm" disabled={!selBalances} onClick={createMatch}>
+                  <Link2 className="h-3.5 w-3.5" />
+                  Create match
                 </Button>
                 <Button
                   size="sm"
-                  variant="outline"
+                  variant="ghost"
                   onClick={() => {
-                    setParsed(null);
-                    setColumnMap(null);
+                    setSelBank(new Set());
+                    setSelLedger(new Set());
                   }}
                 >
-                  Cancel
+                  Clear
                 </Button>
+              </div>
+            </div>
+          )}
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            {/* Bank column */}
+            <div className="space-y-2">
+              <div className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                Bank statement
+              </div>
+              <div className="divide-y divide-line rounded-xl border border-line bg-card">
+                {lines.map((l) => {
+                  const matched = isMatched(l);
+                  const selected = selBank.has(l.rowHash);
+                  return (
+                    <div
+                      key={l.rowHash}
+                      className={cn(
+                        "flex items-center gap-2 px-3 py-2 text-xs",
+                        matched && "bg-fmu-green/5",
+                        selected && "bg-fmu-navy/5",
+                      )}
+                    >
+                      {!matched && !l.accountCode ? (
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => toggleSel(selBank, setSelBank, l.rowHash)}
+                          aria-label={`Select ${l.description}`}
+                        />
+                      ) : (
+                        <span className="w-3" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-ink">{l.description}</div>
+                        <div className="num text-[10px] text-ink-4">
+                          {formatDate(l.date)}
+                        </div>
+                      </div>
+                      <span
+                        className={cn(
+                          "num shrink-0",
+                          l.signedAmount < 0 ? "text-fmu-red" : "text-fmu-green",
+                        )}
+                      >
+                        {fmtSigned(l.signedAmount)}
+                      </span>
+                      <span className="w-32 shrink-0 text-right">
+                        {matched ? (
+                          <span className="pill pill--balanced">matched</span>
+                        ) : (
+                          <select
+                            value={l.accountCode ? `cat:${l.accountCode}` : ""}
+                            onChange={(e) =>
+                              categorize(
+                                l.rowHash,
+                                e.target.value.startsWith("cat:")
+                                  ? e.target.value.slice(4)
+                                  : "",
+                              )
+                            }
+                            className={cn(
+                              "w-full rounded border bg-card px-1 py-0.5 text-[11px] outline-none focus:border-fmu-navy",
+                              l.accountCode ? "border-line" : "border-fmu-yellow/60",
+                            )}
+                          >
+                            <option value="">New: category…</option>
+                            {(accounts ?? []).map((a) => (
+                              <option key={a._id} value={`cat:${a.code}`}>
+                                {a.code} — {a.name}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Ledger column */}
+            <div className="space-y-2">
+              <div className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                Ledger (unreconciled)
+              </div>
+              <div className="divide-y divide-line rounded-xl border border-line bg-card">
+                {candidates.length === 0 ? (
+                  <div className="px-3 py-6 text-center text-[12px] text-ink-4">
+                    No unreconciled ledger entries.
+                  </div>
+                ) : (
+                  candidates.map((c) => {
+                    const claimed = claimedLedger.has(c._id);
+                    const selected = selLedger.has(c._id);
+                    return (
+                      <div
+                        key={c._id}
+                        className={cn(
+                          "flex items-center gap-2 px-3 py-2 text-xs",
+                          claimed && "bg-fmu-green/5",
+                          selected && "bg-fmu-navy/5",
+                        )}
+                      >
+                        {!claimed ? (
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleSel(selLedger, setSelLedger, c._id)}
+                            aria-label={`Select ${c.description}`}
+                          />
+                        ) : (
+                          <span className="w-3" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-ink">{c.description}</div>
+                          <div className="num text-[10px] text-ink-4">
+                            {formatDate(c.date)}
+                          </div>
+                        </div>
+                        <span
+                          className={cn(
+                            "num shrink-0",
+                            c.signedAmount < 0 ? "text-fmu-red" : "text-fmu-green",
+                          )}
+                        >
+                          {fmtSigned(c.signedAmount)}
+                        </span>
+                        <span className="w-16 shrink-0 text-right">
+                          {claimed && (
+                            <span className="pill pill--balanced">matched</span>
+                          )}
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Matched groups */}
+          {matchGroups.length > 0 && (
+            <div className="space-y-2">
+              <div className="text-[11px] font-medium uppercase tracking-wider text-ink-3">
+                Matches ({matchGroups.length})
+              </div>
+              <div className="divide-y divide-line rounded-xl border border-line bg-card-tint/40">
+                {matchGroups.map((g) => (
+                  <MatchGroupRow
+                    key={g.groupId}
+                    group={g}
+                    lineByHash={lineByHash}
+                    candById={candById}
+                    onUnmatch={() => unmatch(g.groupId)}
+                  />
+                ))}
               </div>
             </div>
           )}
         </section>
       )}
 
-      {/* Reconciliation statement (Phase 3c-ii): does opening + the movement
-          of every line tie out to the stated closing balance? */}
-      {lines.length > 0 && (
-        <section className="mt-6 space-y-3 rounded-xl border border-line bg-card-tint/40 p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="eyebrow">Reconciliation</div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
-              {meta.sourceFormat === "pdf" && (
-                <span className="inline-flex items-center gap-1 font-medium text-fmu-navy">
-                  <Sparkles className="h-3.5 w-3.5" /> AI-extracted
-                </span>
-              )}
-              {meta.bankName && <span>{meta.bankName}</span>}
-              {meta.periodLabel && <span>{meta.periodLabel}</span>}
-              {meta.statementCurrency && (
-                <span className="num">{meta.statementCurrency}</span>
-              )}
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
-            <BalanceField
-              label="Opening balance"
-              editable={editable}
-              strValue={openingStr}
-              numValue={meta.openingBalance}
-              onChange={(v) => editBalance("openingBalance", v, false)}
-              onCommit={(v) => editBalance("openingBalance", v, true)}
+      {/* ── Step 4: Report (also the posted read-only view) ── */}
+      {(posted || step === "report") && lines.length > 0 && (
+        <section className="mt-6 space-y-4">
+          <ReconStatement
+            meta={meta}
+            variance={variance}
+            editable={editable && step === "report"}
+            openingStr={openingStr}
+            closingStr={closingStr}
+            onEditBalance={editBalance}
+          />
+          <div className="flex flex-wrap gap-4 rounded-xl border border-line bg-card p-4 text-[12px] text-ink-2">
+            <Stat label="Matched groups" value={matchGroups.length} />
+            <Stat
+              label="New (to post)"
+              value={lines.filter((l) => !isMatched(l) && !!l.accountCode).length}
             />
-            <div className="flex flex-col gap-1">
-              <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink-3">
-                Movement
-              </span>
-              <span className="num text-[13px]">
-                <span className="text-fmu-green">
-                  +{formatAmount(variance.inflows)}
-                </span>{" "}
-                <span className="text-fmu-red">
-                  −{formatAmount(variance.outflows)}
-                </span>
-              </span>
-            </div>
-            <div className="flex flex-col gap-1">
-              <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink-3">
-                Expected closing
-              </span>
-              <span className="num text-[13px] text-ink">
-                {variance.expectedClosing !== null
-                  ? formatAmount(variance.expectedClosing)
-                  : "—"}
-              </span>
-            </div>
-            <BalanceField
-              label="Stated closing"
-              editable={editable}
-              strValue={closingStr}
-              numValue={meta.closingBalance}
-              onChange={(v) => editBalance("closingBalance", v, false)}
-              onCommit={(v) => editBalance("closingBalance", v, true)}
+            <Stat
+              label="Unresolved"
+              value={lines.filter((l) => !isResolved(l)).length}
             />
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
-            <span className="text-[12px] text-ink-3">
-              {variance.variance === null
-                ? "Enter opening & closing balances to check the statement ties out."
-                : variance.tied
-                  ? "Opening + movement equals the stated closing balance."
-                  : "Opening + movement doesn't equal the stated closing — a line may be missing, duplicated, or mis-read."}
-            </span>
-            <span
-              className={cn(
-                "pill",
-                variance.variance === null
-                  ? "pill--neutral"
-                  : variance.tied
-                    ? "pill--balanced"
-                    : "pill--blocked",
-              )}
-            >
-              {variance.variance === null
-                ? "No balances"
-                : variance.tied
-                  ? `Reconciled · ${formatAmount(Math.abs(variance.variance))}`
-                  : `Off by ${fmtSigned(variance.variance)}`}
-            </span>
+            <Stat label="Statement lines" value={lines.length} />
           </div>
         </section>
       )}
 
-      {/* Categorize / review */}
-      {lines.length > 0 && (
-        <section className="mt-6 space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="eyebrow">Statement lines</div>
-            <span
-              className={cn(
-                "pill",
-                coverage.ready ? "pill--balanced" : "pill--blocked",
-              )}
-            >
-              <span className="num">{coverage.resolved}</span>/
-              <span className="num">{coverage.total}</span> resolved
-            </span>
-          </div>
-          <div className="overflow-x-auto rounded-xl border border-line bg-card">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-line bg-bg-2 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
-                  <th className="w-28 px-3 py-2.5">Date</th>
-                  <th className="px-3 py-2.5">Description</th>
-                  <th className="w-28 px-3 py-2.5 text-right">Amount</th>
-                  <th className="w-72 px-3 py-2.5">Match or categorize</th>
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((l) => (
-                  <tr
-                    key={l.rowHash}
-                    className="border-b border-line last:border-0"
-                  >
-                    <td className="num px-3 py-1.5 text-ink-3">
-                      {l.date ? formatDate(l.date) : "—"}
-                    </td>
-                    <td className="px-3 py-1.5 text-ink">{l.description}</td>
-                    <td
-                      className={cn(
-                        "num px-3 py-1.5 text-right",
-                        l.signedAmount < 0 ? "text-fmu-red" : "text-fmu-green",
-                      )}
-                    >
-                      {l.signedAmount < 0 ? "−" : "+"}
-                      {formatAmount(Math.abs(l.signedAmount))}
-                    </td>
-                    <td className="px-3 py-1.5">
-                      {editable ? (
-                        <div className="space-y-1">
-                          <select
-                            value={
-                              matchedHashes.has(l.rowHash)
-                                ? `match:${matches.find((m) => m.rowHash === l.rowHash)!.ledgerEntryId}`
-                                : l.accountCode
-                                  ? `cat:${l.accountCode}`
-                                  : ""
-                            }
-                            onChange={(e) => setTreatment(l, e.target.value)}
-                            className={cn(
-                              "w-full rounded border bg-card px-2 py-1 text-xs outline-none focus:border-fmu-navy",
-                              isResolved(l)
-                                ? "border-line"
-                                : "border-fmu-yellow",
-                            )}
-                          >
-                            <option value="">Choose…</option>
-                            {(availableCandidates.length > 0 ||
-                              matchedHashes.has(l.rowHash)) && (
-                              <optgroup label="Match an existing entry">
-                                {matchedHashes.has(l.rowHash) &&
-                                  (() => {
-                                    const lm = matches.find(
-                                      (m) => m.rowHash === l.rowHash,
-                                    )!;
-                                    return (
-                                      <option
-                                        value={`match:${lm.ledgerEntryId}`}
-                                      >
-                                        {formatDate(lm.ledgerDate)} ·{" "}
-                                        {lm.ledgerDescription} ·{" "}
-                                        {fmtSigned(lm.ledgerAmount)} (matched)
-                                      </option>
-                                    );
-                                  })()}
-                                {availableCandidates.map((c) => (
-                                  <option key={c._id} value={`match:${c._id}`}>
-                                    {formatDate(c.date)} · {c.description} ·{" "}
-                                    {fmtSigned(c.signedAmount)}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                            <optgroup label="Post as new — category">
-                              {(accounts ?? []).map((a) => (
-                                <option key={a._id} value={`cat:${a.code}`}>
-                                  {a.code} — {a.name}
-                                </option>
-                              ))}
-                            </optgroup>
-                          </select>
-                          {!isResolved(l) &&
-                            suggestionByHash.has(l.rowHash) && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  acceptSuggestion(
-                                    l,
-                                    suggestionByHash.get(l.rowHash)!,
-                                  )
-                                }
-                                className="block text-left text-[10px] text-fmu-navy hover:underline"
-                              >
-                                Suggested:{" "}
-                                {suggestionByHash.get(l.rowHash)!
-                                  .ledgerDescription}{" "}
-                                — accept
-                              </button>
-                            )}
-                        </div>
-                      ) : (
-                        <span className="num text-ink-2">
-                          {matchedHashes.has(l.rowHash)
-                            ? "Matched"
-                            : l.accountCode}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {editable && (
-            <div className="flex flex-wrap gap-4 text-[11px] text-ink-3">
-              <span>
-                <span className="num">{matches.length}</span> matched
-              </span>
-              <span>
-                <span className="num">
-                  {lines.filter((l) => !!l.accountCode).length}
-                </span>{" "}
-                new
-              </span>
-              <span>
-                <span className="num">{availableCandidates.length}</span>{" "}
-                ledger entries still unreconciled
-              </span>
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* Actions */}
+      {/* ── Navigation / actions ── */}
       <section className="mt-8 border-t border-line pt-6">
         {posted ? (
           <div className="space-y-3">
@@ -872,8 +1078,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
               {postedBankName ? (
                 <>
                   {" "}
-                  against{" "}
-                  <span className="font-medium text-ink">{postedBankName}</span>
+                  against <span className="font-medium text-ink">{postedBankName}</span>
                 </>
               ) : null}
               .{" "}
@@ -904,11 +1109,7 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
                   >
                     Confirm reopen
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setReopening(false)}
-                  >
+                  <Button size="sm" variant="outline" onClick={() => setReopening(false)}>
                     Cancel
                   </Button>
                 </div>
@@ -925,78 +1126,349 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
               </Button>
             )}
           </div>
-        ) : lines.length > 0 ? (
-          <div className="space-y-3">
-            {editable &&
-              variance.variance !== null &&
-              !variance.tied && (
-                <label className="flex items-start gap-2 rounded-lg border border-fmu-yellow/40 bg-fmu-yellow/5 p-3 text-[12px] text-ink-2">
-                  <input
-                    type="checkbox"
-                    aria-label="Acknowledge the reconciliation variance and post anyway"
-                    checked={ackVariance}
-                    onChange={(e) => setAckVariance(e.target.checked)}
-                    className="mt-0.5"
-                  />
-                  <span>
-                    This statement is off by{" "}
-                    <span className="num">{fmtSigned(variance.variance)}</span>{" "}
-                    (expected closing{" "}
-                    <span className="num">
-                      {formatAmount(variance.expectedClosing!)}
-                    </span>
-                    , stated{" "}
-                    <span className="num">
-                      {formatAmount(variance.closing!)}
-                    </span>
-                    ). I've reviewed it and want to post anyway.
-                  </span>
-                </label>
-              )}
-            <div className="flex flex-wrap items-center gap-3">
-              {task.status === "draft" && (
+        ) : (
+          <div className="flex flex-wrap items-center gap-3">
+            {step !== "bank" && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => goStep(prevStep(step))}
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Back
+              </Button>
+            )}
+            {step !== "report" ? (
+              <Button
+                size="sm"
+                disabled={!canLeaveBank}
+                onClick={() => goStep(nextStep(step))}
+              >
+                Next
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Button>
+            ) : (
+              <>
+                {editable &&
+                  variance.variance !== null &&
+                  !variance.tied && (
+                    <label className="flex w-full items-start gap-2 rounded-lg border border-fmu-yellow/40 bg-fmu-yellow/5 p-3 text-[12px] text-ink-2">
+                      <input
+                        type="checkbox"
+                        aria-label="Acknowledge the reconciliation variance and post anyway"
+                        checked={ackVariance}
+                        onChange={(e) => setAckVariance(e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        This statement is off by{" "}
+                        <span className="num">{fmtSigned(variance.variance)}</span>{" "}
+                        (expected closing{" "}
+                        <span className="num">{formatAmount(variance.expectedClosing!)}</span>
+                        , stated{" "}
+                        <span className="num">{formatAmount(variance.closing!)}</span>). I've
+                        reviewed it and want to post anyway.
+                      </span>
+                    </label>
+                  )}
+                {task.status === "draft" && (
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => void transition("review")}
+                  >
+                    Send for review
+                  </Button>
+                )}
                 <Button
                   size="lg"
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => void transition("review")}
+                  disabled={busy || !ready}
+                  onClick={() => void transition("firm_approved")}
                 >
-                  Send for review
+                  {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Approve &amp; post
                 </Button>
-              )}
-              <Button
-                size="lg"
-                disabled={busy || !ready}
-                onClick={() => void transition("firm_approved")}
-              >
-                {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-                Approve &amp; post
-              </Button>
-              {!ready && (
-                <span className="ml-auto text-[11px] text-ink-3">
-                  {!bankAccountId
-                    ? "Choose a bank account and resolve every line"
-                    : !coverage.ready
-                      ? "Match or categorize every line to post"
-                      : "Acknowledge the reconciliation variance to post"}
-                </span>
-              )}
-            </div>
+                {!ready && (
+                  <span className="ml-auto text-[11px] text-ink-3">
+                    {!bankAccountId
+                      ? "Choose a bank account"
+                      : !coverageReady
+                        ? "Match or categorize every line to post"
+                        : "Acknowledge the variance to post"}
+                  </span>
+                )}
+              </>
+            )}
           </div>
-        ) : null}
+        )}
       </section>
     </div>
   );
 }
 
-/** Signed money: "+1,234.50" / "−1,234.50". */
-function fmtSigned(n: number): string {
-  return `${n < 0 ? "−" : "+"}${formatAmount(Math.abs(n))}`;
+// ── Sub-components ─────────────────────────────────────────────────────
+
+function MatchGroupRow({
+  group,
+  lineByHash,
+  candById,
+  onUnmatch,
+}: {
+  group: MatchGroup;
+  lineByHash: Map<string, StatementLine>;
+  candById: Map<string, Candidate>;
+  onUnmatch: () => void;
+}) {
+  const bankLines = group.bankRowHashes.map((h) => lineByHash.get(h)).filter(Boolean);
+  const ledger = group.ledgerRefs.map((r) => candById.get(r)).filter(Boolean);
+  const isSplit = group.bankRowHashes.length > 1 || group.ledgerRefs.length > 1;
+  return (
+    <div className="flex items-center gap-3 px-3 py-2 text-[12px]">
+      <span
+        className={cn(
+          "pill shrink-0",
+          group.source === "ai"
+            ? "pill--review"
+            : group.source === "exact"
+              ? "pill--balanced"
+              : "pill--neutral",
+        )}
+      >
+        {isSplit ? "split" : group.source === "ai" ? "AI" : group.source}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-ink">
+          {bankLines.map((l) => l!.description).join(" + ") || "(bank lines)"}
+        </div>
+        <div className="num truncate text-[10px] text-ink-4">
+          ↔ {ledger.map((c) => c!.description).join(" + ") || `${group.ledgerRefs.length} ledger entr${group.ledgerRefs.length === 1 ? "y" : "ies"}`}
+          {group.reason ? ` · ${group.reason}` : ""}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onUnmatch}
+        aria-label="Unmatch"
+        className="shrink-0 text-ink-4 hover:text-fmu-red"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
 }
 
-/** An editable (controlled) or read-only opening/closing balance. The editable
- *  input is driven by a string buffer so the live variance/gate track what's
- *  typed; the read-only view shows the formatted number. */
+function ReconStatement({
+  meta,
+  variance,
+  editable,
+  openingStr,
+  closingStr,
+  onEditBalance,
+}: {
+  meta: {
+    sourceFormat?: "csv" | "pdf";
+    bankName?: string;
+    periodLabel?: string;
+    statementCurrency?: string;
+    openingBalance?: number;
+    closingBalance?: number;
+  };
+  variance: ReturnType<typeof bankRecVariance>;
+  editable: boolean;
+  openingStr: string;
+  closingStr: string;
+  onEditBalance: (
+    f: "openingBalance" | "closingBalance",
+    raw: string,
+    commit: boolean,
+  ) => void;
+}) {
+  return (
+    <section className="space-y-3 rounded-xl border border-line bg-card-tint/40 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="eyebrow">Reconciliation</div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
+          {meta.sourceFormat === "pdf" && (
+            <span className="inline-flex items-center gap-1 font-medium text-fmu-navy">
+              <Sparkles className="h-3.5 w-3.5" /> AI-extracted
+            </span>
+          )}
+          {meta.bankName && <span>{meta.bankName}</span>}
+          {meta.periodLabel && <span>{meta.periodLabel}</span>}
+          {meta.statementCurrency && <span className="num">{meta.statementCurrency}</span>}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+        <BalanceField
+          label="Opening balance"
+          editable={editable}
+          strValue={openingStr}
+          numValue={meta.openingBalance}
+          onChange={(v) => onEditBalance("openingBalance", v, false)}
+          onCommit={(v) => onEditBalance("openingBalance", v, true)}
+        />
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink-3">
+            Movement
+          </span>
+          <span className="num text-[13px]">
+            <span className="text-fmu-green">+{formatAmount(variance.inflows)}</span>{" "}
+            <span className="text-fmu-red">−{formatAmount(variance.outflows)}</span>
+          </span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink-3">
+            Expected closing
+          </span>
+          <span className="num text-[13px] text-ink">
+            {variance.expectedClosing !== null
+              ? formatAmount(variance.expectedClosing)
+              : "—"}
+          </span>
+        </div>
+        <BalanceField
+          label="Stated closing"
+          editable={editable}
+          strValue={closingStr}
+          numValue={meta.closingBalance}
+          onChange={(v) => onEditBalance("closingBalance", v, false)}
+          onCommit={(v) => onEditBalance("closingBalance", v, true)}
+        />
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2">
+        <span className="text-[12px] text-ink-3">
+          {variance.variance === null
+            ? "Enter opening & closing balances to check the statement ties out."
+            : variance.tied
+              ? "Opening + movement equals the stated closing balance."
+              : "Opening + movement doesn't equal the stated closing — a line may be missing, duplicated, or mis-read."}
+        </span>
+        <span
+          className={cn(
+            "pill",
+            variance.variance === null
+              ? "pill--neutral"
+              : variance.tied
+                ? "pill--balanced"
+                : "pill--blocked",
+          )}
+        >
+          {variance.variance === null
+            ? "No balances"
+            : variance.tied
+              ? `Reconciled · ${formatAmount(Math.abs(variance.variance))}`
+              : `Off by ${fmtSigned(variance.variance)}`}
+        </span>
+      </div>
+    </section>
+  );
+}
+
+function LinesTable({
+  lines,
+  onRemove,
+}: {
+  lines: StatementLine[];
+  onRemove: (rowHash: string) => void;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-line bg-card">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-line bg-card-tint/40 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
+            <th className="w-28 px-3 py-2.5">Date</th>
+            <th className="px-3 py-2.5">Description</th>
+            <th className="w-28 px-3 py-2.5 text-right">Amount</th>
+            <th className="w-10 px-3 py-2.5" />
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((l) => (
+            <tr key={l.rowHash} className="border-b border-line last:border-0">
+              <td className="num px-3 py-1.5 text-ink-3">{formatDate(l.date)}</td>
+              <td className="px-3 py-1.5 text-ink">{l.description}</td>
+              <td
+                className={cn(
+                  "num px-3 py-1.5 text-right",
+                  l.signedAmount < 0 ? "text-fmu-red" : "text-fmu-green",
+                )}
+              >
+                {fmtSigned(l.signedAmount)}
+              </td>
+              <td className="px-3 py-1.5 text-right">
+                <button
+                  type="button"
+                  onClick={() => onRemove(l.rowHash)}
+                  aria-label="Remove line"
+                  className="text-ink-4 hover:text-fmu-red"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function CandidatesTable({
+  rows,
+  claimed,
+}: {
+  rows: Candidate[];
+  claimed: Set<string>;
+}) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-line bg-card">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="border-b border-line bg-card-tint/40 text-left text-[11px] font-medium uppercase tracking-wider text-ink-3">
+            <th className="w-28 px-3 py-2.5">Date</th>
+            <th className="px-3 py-2.5">Description</th>
+            <th className="w-28 px-3 py-2.5 text-right">Amount</th>
+            <th className="w-20 px-3 py-2.5" />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((c) => (
+            <tr key={c._id} className="border-b border-line last:border-0">
+              <td className="num px-3 py-1.5 text-ink-3">{formatDate(c.date)}</td>
+              <td className="px-3 py-1.5 text-ink">{c.description}</td>
+              <td
+                className={cn(
+                  "num px-3 py-1.5 text-right",
+                  c.signedAmount < 0 ? "text-fmu-red" : "text-fmu-green",
+                )}
+              >
+                {fmtSigned(c.signedAmount)}
+              </td>
+              <td className="px-3 py-1.5 text-right">
+                {claimed.has(c._id) && (
+                  <span className="pill pill--balanced">matched</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink-3">
+        {label}
+      </span>
+      <span className="num text-[15px] text-ink">{value}</span>
+    </div>
+  );
+}
+
 function BalanceField({
   label,
   strValue,
@@ -1035,13 +1507,7 @@ function BalanceField({
   );
 }
 
-function Labeled({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function Labeled({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
       <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-ink-3">
@@ -1081,4 +1547,27 @@ function ColumnSelect({
       </select>
     </Labeled>
   );
+}
+
+// ── Pure helpers ───────────────────────────────────────────────────────
+
+function fmtSigned(n: number): string {
+  return `${n < 0 ? "−" : "+"}${formatAmount(Math.abs(n))}`;
+}
+
+function prevStep(s: WizardStep): WizardStep {
+  const i = STEPS.findIndex((x) => x.key === s);
+  return STEPS[Math.max(0, i - 1)].key;
+}
+
+function nextStep(s: WizardStep): WizardStep {
+  const i = STEPS.findIndex((x) => x.key === s);
+  return STEPS[Math.min(STEPS.length - 1, i + 1)].key;
+}
+
+function contraName(
+  banks: { _id: string; name: string }[] | undefined,
+  bankAccountId: string,
+): string {
+  return (banks ?? []).find((b) => b._id === bankAccountId)?.name ?? "this account";
 }
