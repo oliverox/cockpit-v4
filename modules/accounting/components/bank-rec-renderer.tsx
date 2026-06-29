@@ -268,11 +268,14 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
     : variance.tied;
   const varianceOk = gateVariance === null || gateTied || ackVariance;
 
+  // Mirror finalize's per-mutation write bound (it imports ~2N rows in Mode A).
+  const overCap = lines.length + (modeA ? ledgerTxns.length : 0) > 500;
   const ready =
     coverageReady &&
     !!bankAccountId &&
     (accounts?.length ?? 0) > 0 &&
-    varianceOk;
+    varianceOk &&
+    !overCap;
 
   const canLeaveBank = lines.length > 0 && !!bankAccountId;
   const canLeaveLedger = !modeA || ledgerTxns.length > 0;
@@ -1726,11 +1729,13 @@ export function BankRecRenderer({ task, taskId }: TaskRendererProps) {
                 </Button>
                 {!ready && (
                   <span className="ml-auto text-[11px] text-ink-3">
-                    {!bankAccountId
-                      ? "Choose a bank account"
-                      : !coverageReady
-                        ? "Match or categorize every line to post"
-                        : "Acknowledge the variance to post"}
+                    {overCap
+                      ? "Too many transactions (max 500) — split into monthly reconciliations"
+                      : !bankAccountId
+                        ? "Choose a bank account"
+                        : !coverageReady
+                          ? "Match or categorize every line to post"
+                          : "Acknowledge the variance to post"}
                   </span>
                 )}
               </>
