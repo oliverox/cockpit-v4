@@ -596,10 +596,10 @@ function normalizeStatement(raw: unknown): ExtractedStatement {
  * mirrors cockpit-v3's extraction parsing so a `max_tokens`-truncated response
  * still yields the transactions captured so far. Throws if unrecoverable.
  */
-export function parseExtractionJson(text: string): ExtractedStatement {
+function parseLenientJson(text: string): unknown {
   const raw = (text ?? "").trim();
   if (!raw) throw new Error("AI returned no text.");
-  // The prompt forbids fences, so the common case is raw JSON — try it first,
+  // The prompts forbid fences, so the common case is raw JSON — try it first,
   // then a line-based fence strip (safe even if a string value contains ```).
   const stripped = raw
     .replace(/^```(?:json)?[ \t]*\r?\n?/, "")
@@ -607,14 +607,18 @@ export function parseExtractionJson(text: string): ExtractedStatement {
     .trim();
   for (const c of stripped === raw ? [raw] : [raw, stripped]) {
     try {
-      return normalizeStatement(JSON.parse(c));
+      return JSON.parse(c);
     } catch {
       /* fall through to repair */
     }
   }
   // Truncation repair for a max_tokens cut — string-literal-aware so a literal
   // '}' or ']' inside a description never confuses the cut point or the count.
-  return normalizeStatement(JSON.parse(repairTruncatedJson(stripped)));
+  return JSON.parse(repairTruncatedJson(stripped));
+}
+
+export function parseExtractionJson(text: string): ExtractedStatement {
+  return normalizeStatement(parseLenientJson(text));
 }
 
 /**
@@ -687,4 +691,62 @@ export function mapExtractedToLines(stmt: ExtractedStatement): MapResult {
     });
   });
   return { lines, skipped };
+}
+
+// ── AI matching (Phase 3d) ──────────────────────────────────────────────
+// The Opus matching action (convex/modules/accounting/match.ts) sends the
+// unmatched bank lines + ledger candidates (each with a stable `id`) and gets
+// back proposed matches keyed by those ids. Parsing is pure + shared so it's
+// testable without the network; every id/amount the model returns is
+// re-validated server-side before any ledger entry is touched.
+
+/** One proposed match the model returns (ids reference the inputs we sent). */
+export type AiMatchProposal = {
+  bankIds: string[];
+  ledgerIds: string[];
+  confidence?: "exact" | "probable";
+  notes?: string;
+};
+
+export type AiMatchResult = {
+  matches: AiMatchProposal[];
+  unmatchedBankIds: string[];
+  unmatchedLedgerIds: string[];
+  errors: string[];
+};
+
+function asStringArray(x: unknown): string[] {
+  return Array.isArray(x)
+    ? x.map((v) => String(v)).filter((s) => s.length > 0)
+    : [];
+}
+
+function normalizeMatchResult(raw: unknown): AiMatchResult {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const matches = Array.isArray(o.matches) ? o.matches : [];
+  return {
+    matches: matches.map((m) => {
+      const mm = (m ?? {}) as Record<string, unknown>;
+      const conf = mm.confidence;
+      return {
+        bankIds: asStringArray(mm.bankIds),
+        ledgerIds: asStringArray(mm.ledgerIds),
+        confidence:
+          conf === "exact" ? "exact" : conf === "probable" ? "probable" : undefined,
+        notes: typeof mm.notes === "string" ? mm.notes : undefined,
+      };
+    }),
+    unmatchedBankIds: asStringArray(o.unmatchedBankIds),
+    unmatchedLedgerIds: asStringArray(o.unmatchedLedgerIds),
+    errors: asStringArray(o.errors),
+  };
+}
+
+/**
+ * Parse the matching model's JSON (fence-strip + truncation-repair shared with
+ * extraction), tolerating missing fields. Pure; the caller re-validates every
+ * id and amount against the inputs it sent.
+ */
+export function parseMatchJson(text: string): AiMatchResult {
+  return normalizeMatchResult(parseLenientJson(text));
 }
