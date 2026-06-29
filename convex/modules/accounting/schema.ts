@@ -135,6 +135,8 @@ export const accountingTables = {
     reconciliationId: v.string(),
     /** Hash of the uploaded statement — enforced against duplicate imports. */
     statementFileHash: v.optional(v.string()),
+    /** Hash of the uploaded cashbook (Mode A) — also duplicate-guarded. */
+    cashbookFileHash: v.optional(v.string()),
     periodStart: v.optional(v.number()),
     periodEnd: v.optional(v.number()),
     lineCount: v.number(),
