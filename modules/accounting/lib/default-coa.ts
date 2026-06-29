@@ -34,6 +34,7 @@ const ACCOUNTS: DefaultCoaAccount[] = [
   { code: "10040", name: "Bank - EUR", type: "asset", parentCode: "10000" },
   { code: "10800", name: "Undeposited Funds", type: "asset", parentCode: "10000" },
   { code: "10810", name: "Petty Cash", type: "asset", parentCode: "10000" },
+  { code: "10850", name: "Suspense / Clearing", type: "asset", parentCode: "10000" },
 
   { code: "10900", name: "Short-Term Investments", type: "asset" },
   { code: "10910", name: "Treasury Bills", type: "asset", parentCode: "10900" },
@@ -277,3 +278,13 @@ const ACCOUNTS: DefaultCoaAccount[] = [
 ];
 
 export const DEFAULT_COA: ReadonlyArray<DefaultCoaAccount> = ACCOUNTS;
+
+/**
+ * Clearing/suspense account code. Bank-reconciliation cashbook imports (Mode A)
+ * post uncategorized lines here so the double-entry stays balanced; the firm
+ * reclassifies them later. Part of the default COA above and seeded on demand
+ * by `ensureSuspenseAccount` (convex/modules/accounting/accounts.ts) for
+ * customers whose chart predates it.
+ */
+export const SUSPENSE_CODE = "10850";
+export const SUSPENSE_NAME = "Suspense / Clearing";

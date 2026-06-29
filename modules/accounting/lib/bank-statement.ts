@@ -251,6 +251,40 @@ export type MatchCandidate = {
   signedAmount: number;
 };
 
+/**
+ * One logical match between bank statement line(s) and ledger reference(s)
+ * (supersedes the 1:1 LineMatch, supporting one-to-many / many-to-one splits).
+ *  - `bankRowHashes`: the statement line(s) on the bank side.
+ *  - `ledgerRefs`: Mode B → existing ledger entry `_id`s; Mode A → LedgerTxn ids.
+ *  - `source`: how the group was formed; AI groups must still pass finalize's
+ *    server-side balance assertions before any ledger entry is flipped.
+ */
+export type MatchGroup = {
+  groupId: string;
+  bankRowHashes: string[];
+  ledgerRefs: string[];
+  source: "exact" | "manual" | "ai";
+  confidence?: "exact" | "probable";
+  /** AI rationale (notes from the matching model), for display only. */
+  reason?: string;
+};
+
+/**
+ * A cashbook line uploaded as the ledger side in Mode A (`ledgerSource:
+ * "cashbook"`). Lives only in task.payload until finalize imports it into the
+ * double-entry ledger. `accountCode` is the category assigned in review; when
+ * absent, the import posts it to SUSPENSE_CODE.
+ */
+export type LedgerTxn = {
+  /** Stable id within the payload (used as a MatchGroup ledgerRef in Mode A). */
+  id: string;
+  date: number;
+  description: string;
+  /** Positive = money in, negative = money out (same convention as lines). */
+  signedAmount: number;
+  accountCode?: string;
+};
+
 /** The accounting.bank_rec task's draft payload (opaque to core). */
 export type BankRecPayload = {
   /** accounting_bank_accounts id (stringified — opaque in the payload). */
@@ -259,8 +293,34 @@ export type BankRecPayload = {
   periodStart?: number;
   periodEnd?: number;
   lines: StatementLine[];
-  /** Lines matched to existing ledger entries (vs categorized as new). */
+  /** Legacy 1:1 matches (Phase 3b). Read through `lineMatchesToGroups` so
+   *  finalize has a single match-group code path; new matches go in
+   *  `matchGroups` below. */
   matches?: LineMatch[];
+  /** Match groups (splits + AI), supersede `matches`. */
+  matchGroups?: MatchGroup[];
+  /** Which side the ledger comes from. "existing" = the Convex ledger (Mode B,
+   *  default); "cashbook" = an uploaded ledger file (Mode A). */
+  ledgerSource?: "existing" | "cashbook";
+  /** Mode A posting behaviour. "import" (v3-faithful) posts the cashbook into
+   *  the ledger; "report" posts nothing but explicitly-recorded items. */
+  modeAVariant?: "import" | "report";
+  /** Wizard cursor (the 4-step stepper). */
+  step?: "bank" | "ledger" | "reconcile" | "report";
+  /** Mode A: the uploaded cashbook side + its hash and balances. */
+  ledgerTxns?: LedgerTxn[];
+  cashbookFileHash?: string;
+  cashbookOpening?: number;
+  cashbookClosing?: number;
+  /** Metadata from the last AI auto-match run (display + truncation warning). */
+  aiMatch?: {
+    ranAt: number;
+    model: string;
+    groupCount: number;
+    unmatchedBank: number;
+    unmatchedLedger: number;
+    truncated?: boolean;
+  };
   /** How the lines were ingested (Phase 3c). */
   sourceFormat?: "csv" | "pdf";
   /** Statement-level metadata captured during AI PDF extraction (Phase 3c).
@@ -338,6 +398,40 @@ export function bankRecCoverage(
     (l) => !!l.accountCode || matched.has(l.rowHash),
   ).length;
   return { total, resolved, ready: total > 0 && resolved === total };
+}
+
+/**
+ * Upgrade legacy 1:1 `LineMatch[]` payloads to singleton `MatchGroup[]`, so
+ * finalize and the renderer have a single match-group code path. Pure; the
+ * inverse is never needed (new matches are authored directly as MatchGroups).
+ */
+export function lineMatchesToGroups(matches: LineMatch[] = []): MatchGroup[] {
+  return matches.map((m) => ({
+    groupId: `g_${m.rowHash}`,
+    bankRowHashes: [m.rowHash],
+    ledgerRefs: [m.ledgerEntryId],
+    source: m.matchType === "exact" ? "exact" : "manual",
+  }));
+}
+
+/**
+ * The effective match groups for a payload: legacy `matches` upgraded to
+ * singletons, plus any `matchGroups`, de-duplicated by groupId (matchGroups
+ * win). The single source of truth both the renderer and finalize read.
+ */
+export function effectiveMatchGroups(p: {
+  matches?: LineMatch[];
+  matchGroups?: MatchGroup[];
+}): MatchGroup[] {
+  const groups = lineMatchesToGroups(p.matches);
+  const seen = new Set(groups.map((g) => g.groupId));
+  for (const g of p.matchGroups ?? []) {
+    if (!seen.has(g.groupId)) {
+      seen.add(g.groupId);
+      groups.push(g);
+    }
+  }
+  return groups;
 }
 
 export type BankRecVariance = {
@@ -502,10 +596,10 @@ function normalizeStatement(raw: unknown): ExtractedStatement {
  * mirrors cockpit-v3's extraction parsing so a `max_tokens`-truncated response
  * still yields the transactions captured so far. Throws if unrecoverable.
  */
-export function parseExtractionJson(text: string): ExtractedStatement {
+function parseLenientJson(text: string): unknown {
   const raw = (text ?? "").trim();
   if (!raw) throw new Error("AI returned no text.");
-  // The prompt forbids fences, so the common case is raw JSON — try it first,
+  // The prompts forbid fences, so the common case is raw JSON — try it first,
   // then a line-based fence strip (safe even if a string value contains ```).
   const stripped = raw
     .replace(/^```(?:json)?[ \t]*\r?\n?/, "")
@@ -513,14 +607,18 @@ export function parseExtractionJson(text: string): ExtractedStatement {
     .trim();
   for (const c of stripped === raw ? [raw] : [raw, stripped]) {
     try {
-      return normalizeStatement(JSON.parse(c));
+      return JSON.parse(c);
     } catch {
       /* fall through to repair */
     }
   }
   // Truncation repair for a max_tokens cut — string-literal-aware so a literal
   // '}' or ']' inside a description never confuses the cut point or the count.
-  return normalizeStatement(JSON.parse(repairTruncatedJson(stripped)));
+  return JSON.parse(repairTruncatedJson(stripped));
+}
+
+export function parseExtractionJson(text: string): ExtractedStatement {
+  return normalizeStatement(parseLenientJson(text));
 }
 
 /**
@@ -593,4 +691,62 @@ export function mapExtractedToLines(stmt: ExtractedStatement): MapResult {
     });
   });
   return { lines, skipped };
+}
+
+// ── AI matching (Phase 3d) ──────────────────────────────────────────────
+// The Opus matching action (convex/modules/accounting/match.ts) sends the
+// unmatched bank lines + ledger candidates (each with a stable `id`) and gets
+// back proposed matches keyed by those ids. Parsing is pure + shared so it's
+// testable without the network; every id/amount the model returns is
+// re-validated server-side before any ledger entry is touched.
+
+/** One proposed match the model returns (ids reference the inputs we sent). */
+export type AiMatchProposal = {
+  bankIds: string[];
+  ledgerIds: string[];
+  confidence?: "exact" | "probable";
+  notes?: string;
+};
+
+export type AiMatchResult = {
+  matches: AiMatchProposal[];
+  unmatchedBankIds: string[];
+  unmatchedLedgerIds: string[];
+  errors: string[];
+};
+
+function asStringArray(x: unknown): string[] {
+  return Array.isArray(x)
+    ? x.map((v) => String(v)).filter((s) => s.length > 0)
+    : [];
+}
+
+function normalizeMatchResult(raw: unknown): AiMatchResult {
+  const o = (raw ?? {}) as Record<string, unknown>;
+  const matches = Array.isArray(o.matches) ? o.matches : [];
+  return {
+    matches: matches.map((m) => {
+      const mm = (m ?? {}) as Record<string, unknown>;
+      const conf = mm.confidence;
+      return {
+        bankIds: asStringArray(mm.bankIds),
+        ledgerIds: asStringArray(mm.ledgerIds),
+        confidence:
+          conf === "exact" ? "exact" : conf === "probable" ? "probable" : undefined,
+        notes: typeof mm.notes === "string" ? mm.notes : undefined,
+      };
+    }),
+    unmatchedBankIds: asStringArray(o.unmatchedBankIds),
+    unmatchedLedgerIds: asStringArray(o.unmatchedLedgerIds),
+    errors: asStringArray(o.errors),
+  };
+}
+
+/**
+ * Parse the matching model's JSON (fence-strip + truncation-repair shared with
+ * extraction), tolerating missing fields. Pure; the caller re-validates every
+ * id and amount against the inputs it sent.
+ */
+export function parseMatchJson(text: string): AiMatchResult {
+  return normalizeMatchResult(parseLenientJson(text));
 }

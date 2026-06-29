@@ -147,21 +147,41 @@ export const accountingTables = {
     .index("by_posted_task", ["postedByTaskId"]),
 
   /**
-   * Phase 3b: one row per statement line matched to a pre-existing ledger
-   * entry (1:1). Records the link for the audit trail; written ONLY by the
-   * bank-rec finalize handler, reversed (deleted) on reopen. The matched
-   * ledger row's reconciledStatus flip is tracked separately as an op:update
-   * side-effect so reopen restores it.
+   * One row per ledger entry reconciled to bank-statement line(s). Records the
+   * link for the audit trail; written ONLY by the bank-rec finalize handler,
+   * reversed (deleted) on reopen. The matched ledger row's reconciledStatus
+   * flip is tracked separately as an op:update side-effect so reopen restores
+   * it.
+   *
+   * Splits (Milestone 1+): a logical match can span many lines/entries. We keep
+   * exactly ONE row per ledger entry (so `by_ledger_entry` stays single-valued
+   * and indexable — Convex can't index into arrays); the rows of one logical
+   * match share `matchGroupId`, and the bank line(s) on the match's bank side
+   * ride along as the non-indexed `statementLineRowHashes` snapshot.
+   *
+   * The new fields are optional through the widen→narrow migration; the legacy
+   * 1:1 `statementLineRowHash` is dropped in the narrow step (Milestone 7).
    */
   accounting_reconciliation_matches: defineTable({
     workspaceId: v.id("workspaces"),
     customerId: v.id("customers"),
     bankAccountId: v.string(),
     reconciliationId: v.string(),
-    statementLineRowHash: v.string(),
+    /** Groups the rows of one logical match (a split → several rows). */
+    matchGroupId: v.optional(v.string()),
+    /** Legacy 1:1 bank-line hash (Phase 3b). Superseded by the array below. */
+    statementLineRowHash: v.optional(v.string()),
+    /** The bank line(s) on this match's bank side — non-indexed snapshot. */
+    statementLineRowHashes: v.optional(v.array(v.string())),
     ledgerEntryId: v.id("accounting_ledger_entries"),
-    matchType: v.union(v.literal("exact"), v.literal("manual")),
-    // Snapshot of the bank line (lines live only in task.payload).
+    matchType: v.union(
+      v.literal("exact"),
+      v.literal("manual"),
+      v.literal("probable"),
+      v.literal("split"),
+      v.literal("ai"),
+    ),
+    // Snapshot of the bank side (lines live only in task.payload).
     statementDate: v.number(),
     statementDescription: v.string(),
     statementAmount: v.number(),
@@ -171,5 +191,6 @@ export const accountingTables = {
   })
     .index("by_reconciliation", ["reconciliationId"])
     .index("by_ledger_entry", ["ledgerEntryId"])
+    .index("by_match_group", ["matchGroupId"])
     .index("by_customer", ["customerId"]),
 };

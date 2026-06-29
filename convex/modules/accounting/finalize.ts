@@ -8,7 +8,10 @@ import {
   round2,
 } from "../../../modules/accounting/lib/journal-entry";
 import { toPeriodKey } from "../../../modules/accounting/lib/period";
-import type { BankRecPayload } from "../../../modules/accounting/lib/bank-statement";
+import {
+  effectiveMatchGroups,
+  type BankRecPayload,
+} from "../../../modules/accounting/lib/bank-statement";
 
 /**
  * Post a balanced journal entry's draft lines to the ledger. A plain helper
@@ -130,14 +133,40 @@ export async function postBankStatementToLedger(
   if (!payload.bankAccountId) throw new Error("Select a bank account first.");
   if (lines.length === 0) throw new Error("No statement lines to post.");
 
-  // Partition (Phase 3b): matched lines flip an existing unreconciled ledger
-  // entry to reconciled (no new posting); new lines post a balanced pair (3a).
-  // Only NEW lines need a category.
-  const matchByHash = new Map(
-    (payload.matches ?? []).map((m) => [m.rowHash, m]),
-  );
-  const matchedLines = lines.filter((l) => matchByHash.has(l.rowHash));
-  const newLines = lines.filter((l) => !matchByHash.has(l.rowHash));
+  // Mode A (uploaded cashbook) lands in a later milestone; this handler posts
+  // Mode B — reconcile the statement against the existing Convex ledger.
+  if (payload.ledgerSource === "cashbook") {
+    throw new Error("Cashbook reconciliation isn't available yet.");
+  }
+
+  // Match groups (Phase 3d): legacy 1:1 `matches` are upgraded to singletons
+  // and unioned with `matchGroups` (splits / AI). A group flips its matched
+  // ledger entry/entries to reconciled (no new posting); a statement line in
+  // NO group is "new" and posts a balanced pair (3a). Only new lines need a
+  // category. Each bank line may appear in at most one group.
+  const groups = effectiveMatchGroups(payload);
+  const lineByHash = new Map(lines.map((l) => [l.rowHash, l]));
+
+  const matchedBankHashes = new Set<string>();
+  for (const g of groups) {
+    if (g.bankRowHashes.length === 0 || g.ledgerRefs.length === 0) {
+      throw new Error(
+        "A match must have at least one statement line and one ledger entry.",
+      );
+    }
+    for (const h of g.bankRowHashes) {
+      if (matchedBankHashes.has(h)) {
+        throw new Error("A statement line appears in more than one match.");
+      }
+      matchedBankHashes.add(h);
+      if (!lineByHash.has(h)) {
+        throw new Error(
+          "A match references a statement line that no longer exists — reopen and re-match.",
+        );
+      }
+    }
+  }
+  const newLines = lines.filter((l) => !matchedBankHashes.has(l.rowHash));
   for (const l of newLines) {
     if (!l.accountCode) {
       throw new Error("Every new statement line must be categorized before posting.");
@@ -229,80 +258,123 @@ export async function postBankStatementToLedger(
     });
   };
 
-  // Matched lines: flip the existing ledger entry to reconciled (op:update,
-  // before-state captured for reversal) + record the match row.
-  const claimed = new Set<string>();
-  for (const l of matchedLines) {
-    const m = matchByHash.get(l.rowHash)!;
-    if (claimed.has(m.ledgerEntryId)) {
-      throw new Error("Two statement lines are matched to the same ledger entry.");
+  // Matched groups: flip every referenced ledger entry to reconciled
+  // (op:update, before-state captured for reversal) + one match row per ledger
+  // entry. A group may span several bank lines and/or several ledger entries
+  // (a split); each ledger entry is claimed by at most one group across the
+  // whole batch.
+  const claimedLedger = new Set<string>();
+  for (const g of groups) {
+    const isSplit = g.bankRowHashes.length > 1 || g.ledgerRefs.length > 1;
+    const matchType: "exact" | "manual" | "probable" | "split" | "ai" = isSplit
+      ? "split"
+      : g.source === "ai"
+        ? g.confidence === "exact"
+          ? "exact"
+          : g.confidence === "probable"
+            ? "probable"
+            : "ai"
+        : g.source; // "exact" | "manual"
+
+    // Resolve + validate every ledger entry the group claims.
+    const entries: Doc<"accounting_ledger_entries">[] = [];
+    for (const ref of g.ledgerRefs) {
+      if (claimedLedger.has(ref)) {
+        throw new Error("Two matches claim the same ledger entry.");
+      }
+      claimedLedger.add(ref);
+      const entry = await ctx.db.get(
+        ref as Id<"accounting_ledger_entries">,
+      );
+      if (!entry || entry.customerId !== task.customerId) {
+        throw new Error("A matched ledger entry no longer exists.");
+      }
+      if (entry.reconciliationStatus !== "unreconciled") {
+        throw new Error(
+          "A matched ledger entry is already reconciled — reopen and re-match.",
+        );
+      }
+      // A statement line can only reconcile against an entry on THIS bank
+      // account's ledger code — guards against matching the wrong leg of a
+      // journal entry.
+      if (entry.accountCode !== contraCode) {
+        throw new Error(
+          "A matched entry must be on the bank account's ledger account.",
+        );
+      }
+      entries.push(entry);
     }
-    claimed.add(m.ledgerEntryId);
-    const entry = await ctx.db.get(
-      m.ledgerEntryId as Id<"accounting_ledger_entries">,
+
+    // The bank side and ledger side must net to the same signed amount (amount
+    // AND direction agree), within tolerance — generalises the 1:1 check to
+    // splits, so a receipt can't be matched against an equal-magnitude payment.
+    const bankSigned = round2(
+      g.bankRowHashes.reduce(
+        (s, h) => round2(s + (lineByHash.get(h)?.signedAmount ?? 0)),
+        0,
+      ),
     );
-    if (!entry || entry.customerId !== task.customerId) {
-      throw new Error("A matched ledger entry no longer exists.");
-    }
-    if (entry.reconciliationStatus !== "unreconciled") {
+    const ledgerSigned = round2(
+      entries.reduce((s, e) => round2(s + round2(e.debit - e.credit)), 0),
+    );
+    if (Math.abs(bankSigned - ledgerSigned) > 0.02) {
       throw new Error(
-        "A matched ledger entry is already reconciled — reopen and re-match.",
+        "A match's statement total doesn't equal its ledger total.",
       );
     }
-    // A statement line can only reconcile against an entry on THIS bank
-    // account's ledger code, with a matching signed amount (debit−credit,
-    // so amount AND direction must agree). Guards against matching the wrong
-    // leg of a journal entry or a receipt against an equal-magnitude payment.
-    if (entry.accountCode !== contraCode) {
-      throw new Error(
-        "A matched entry must be on the bank account's ledger account.",
-      );
+
+    // Snapshot of the bank side for the match rows (lines live only in payload).
+    const groupDates = g.bankRowHashes
+      .map((h) => lineByHash.get(h)?.date)
+      .filter((d): d is number => typeof d === "number");
+    const statementDate = groupDates.length ? Math.min(...groupDates) : postedAt;
+    const firstLine = lineByHash.get(g.bankRowHashes[0]);
+    const statementDescription =
+      (firstLine?.description || task.title) +
+      (g.bankRowHashes.length > 1 ? ` (+${g.bankRowHashes.length - 1} more)` : "");
+
+    for (const entry of entries) {
+      const before = {
+        reconciliationStatus: entry.reconciliationStatus,
+        // null (not undefined) so it survives serialization inside the
+        // sideEffects array; reverseApproval translates null → undefined.
+        reconciliationId: entry.reconciliationId ?? null,
+      };
+      await ctx.db.patch(entry._id, {
+        reconciliationStatus: "reconciled",
+        reconciliationId: batchId,
+      });
+      sideEffects.push({
+        kind: "substrate",
+        table: "accounting_ledger_entries",
+        refId: entry._id,
+        op: "update",
+        before,
+        after: { reconciliationStatus: "reconciled", reconciliationId: batchId },
+      });
+      const matchRowId = await ctx.db.insert("accounting_reconciliation_matches", {
+        workspaceId: task.workspaceId,
+        customerId: task.customerId,
+        bankAccountId: payload.bankAccountId,
+        reconciliationId: batchId,
+        matchGroupId: g.groupId,
+        statementLineRowHashes: g.bankRowHashes,
+        ledgerEntryId: entry._id,
+        matchType,
+        statementDate,
+        statementDescription,
+        statementAmount: bankSigned,
+        postedByTaskId: task._id,
+        postedBy: approvedBy,
+        postedAt,
+      });
+      sideEffects.push({
+        kind: "substrate",
+        table: "accounting_reconciliation_matches",
+        refId: matchRowId,
+        op: "create",
+      });
     }
-    const entrySigned = round2(entry.debit - entry.credit);
-    if (Math.abs(entrySigned - round2(l.signedAmount)) > 0.02) {
-      throw new Error(
-        "A matched entry's amount/direction doesn't match the statement line.",
-      );
-    }
-    const before = {
-      reconciliationStatus: entry.reconciliationStatus,
-      // null (not undefined) so it survives serialization inside the
-      // sideEffects array; reverseApproval translates null → undefined.
-      reconciliationId: entry.reconciliationId ?? null,
-    };
-    await ctx.db.patch(entry._id, {
-      reconciliationStatus: "reconciled",
-      reconciliationId: batchId,
-    });
-    sideEffects.push({
-      kind: "substrate",
-      table: "accounting_ledger_entries",
-      refId: entry._id,
-      op: "update",
-      before,
-      after: { reconciliationStatus: "reconciled", reconciliationId: batchId },
-    });
-    const matchRowId = await ctx.db.insert("accounting_reconciliation_matches", {
-      workspaceId: task.workspaceId,
-      customerId: task.customerId,
-      bankAccountId: payload.bankAccountId,
-      reconciliationId: batchId,
-      statementLineRowHash: l.rowHash,
-      ledgerEntryId: entry._id,
-      matchType: m.matchType,
-      statementDate: l.date,
-      statementDescription: l.description || task.title,
-      statementAmount: l.signedAmount,
-      postedByTaskId: task._id,
-      postedBy: approvedBy,
-      postedAt,
-    });
-    sideEffects.push({
-      kind: "substrate",
-      table: "accounting_reconciliation_matches",
-      refId: matchRowId,
-      op: "create",
-    });
   }
 
   // New lines: post a balanced bank-contra / category pair (the 3a flow).
