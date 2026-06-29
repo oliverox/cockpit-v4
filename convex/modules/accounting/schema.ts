@@ -155,14 +155,11 @@ export const accountingTables = {
    * flip is tracked separately as an op:update side-effect so reopen restores
    * it.
    *
-   * Splits (Milestone 1+): a logical match can span many lines/entries. We keep
-   * exactly ONE row per ledger entry (so `by_ledger_entry` stays single-valued
-   * and indexable — Convex can't index into arrays); the rows of one logical
-   * match share `matchGroupId`, and the bank line(s) on the match's bank side
-   * ride along as the non-indexed `statementLineRowHashes` snapshot.
-   *
-   * The new fields are optional through the widen→narrow migration; the legacy
-   * 1:1 `statementLineRowHash` is dropped in the narrow step (Milestone 7).
+   * Splits: a logical match can span many lines/entries. We keep exactly ONE
+   * row per ledger entry (so `by_ledger_entry` stays single-valued and
+   * indexable — Convex can't index into arrays); the rows of one logical match
+   * share `matchGroupId`, and the bank line(s) on the match's bank side ride
+   * along as the non-indexed `statementLineRowHashes` snapshot.
    */
   accounting_reconciliation_matches: defineTable({
     workspaceId: v.id("workspaces"),
@@ -170,11 +167,9 @@ export const accountingTables = {
     bankAccountId: v.string(),
     reconciliationId: v.string(),
     /** Groups the rows of one logical match (a split → several rows). */
-    matchGroupId: v.optional(v.string()),
-    /** Legacy 1:1 bank-line hash (Phase 3b). Superseded by the array below. */
-    statementLineRowHash: v.optional(v.string()),
+    matchGroupId: v.string(),
     /** The bank line(s) on this match's bank side — non-indexed snapshot. */
-    statementLineRowHashes: v.optional(v.array(v.string())),
+    statementLineRowHashes: v.array(v.string()),
     ledgerEntryId: v.id("accounting_ledger_entries"),
     matchType: v.union(
       v.literal("exact"),
