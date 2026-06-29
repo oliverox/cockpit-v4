@@ -1,6 +1,6 @@
 {
   "name": "cockpit-v4",
-  "version": "4.0.1",
+  "version": "4.1.0",
   "private": true,
   "scripts": {
     "dev": "concurrently --names next,convex -c cyan,magenta \"pnpm dev:next\" \"pnpm dev:convex\"",
