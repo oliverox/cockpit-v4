@@ -22,6 +22,8 @@ import type * as modules_accounting_extract from "../modules/accounting/extract.
 import type * as modules_accounting_extractInternal from "../modules/accounting/extractInternal.js";
 import type * as modules_accounting_finalize from "../modules/accounting/finalize.js";
 import type * as modules_accounting_ledger from "../modules/accounting/ledger.js";
+import type * as modules_accounting_match from "../modules/accounting/match.js";
+import type * as modules_accounting_matchInternal from "../modules/accounting/matchInternal.js";
 import type * as superadmin from "../superadmin.js";
 import type * as tasks from "../tasks.js";
 import type * as team from "../team.js";
@@ -50,6 +52,8 @@ declare const fullApi: ApiFromModules<{
   "modules/accounting/extractInternal": typeof modules_accounting_extractInternal;
   "modules/accounting/finalize": typeof modules_accounting_finalize;
   "modules/accounting/ledger": typeof modules_accounting_ledger;
+  "modules/accounting/match": typeof modules_accounting_match;
+  "modules/accounting/matchInternal": typeof modules_accounting_matchInternal;
   superadmin: typeof superadmin;
   tasks: typeof tasks;
   team: typeof team;
